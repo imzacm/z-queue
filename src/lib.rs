@@ -10,4 +10,5 @@ mod container;
 mod map;
 mod queue;
 
+pub use self::map::ZQueueMap;
 pub use self::queue::ZQueue;

@@ -194,7 +194,7 @@ where
         self.find_waiter.notify(usize::MAX);
     }
 
-    pub fn try_pop<KF>(&self, mut key_fn: KF) -> Option<T>
+    pub fn try_pop<KF>(&self, mut key_fn: KF) -> Option<(K, T)>
     where
         KF: FnMut(&K) -> bool,
     {
@@ -211,14 +211,14 @@ where
             if key_fn(key)
                 && let Some(item) = self.queues[*index].try_pop()
             {
-                return Some(item);
+                return Some((key.clone(), item));
             }
         }
 
         None
     }
 
-    pub fn pop<KF>(&self, mut key_fn: KF) -> T
+    pub fn pop<KF>(&self, mut key_fn: KF) -> (K, T)
     where
         KF: FnMut(&K) -> bool,
     {
@@ -242,7 +242,7 @@ where
                     if key_fn(key)
                         && let Some(item) = self.queues[*index].try_pop()
                     {
-                        return item;
+                        return (key.clone(), item);
                     }
                 }
             }
@@ -252,7 +252,7 @@ where
     }
 
     #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
-    pub async fn pop_async<KF>(&self, mut key_fn: KF) -> T
+    pub async fn pop_async<KF>(&self, mut key_fn: KF) -> (K, T)
     where
         KF: FnMut(&K) -> bool,
     {
@@ -276,7 +276,7 @@ where
                     if key_fn(key)
                         && let Some(item) = self.queues[*index].try_pop()
                     {
-                        return item;
+                        return (key.clone(), item);
                     }
                 }
             }
@@ -285,7 +285,7 @@ where
         }
     }
 
-    pub fn try_find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> Option<T>
+    pub fn try_find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> Option<(K, T)>
     where
         KF: FnMut(&K) -> bool,
         F: FnMut(&T) -> bool,
@@ -304,14 +304,14 @@ where
             if key_fn(key)
                 && let Some(item) = self.queues[*index].try_find(&mut find_fn)
             {
-                return Some(item);
+                return Some((key.clone(), item));
             }
         }
 
         None
     }
 
-    pub fn find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> T
+    pub fn find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, T)
     where
         KF: FnMut(&K) -> bool,
         F: FnMut(&T) -> bool,
@@ -336,7 +336,7 @@ where
                     if key_fn(key)
                         && let Some(item) = self.queues[*index].try_find(&mut find_fn)
                     {
-                        return item;
+                        return (key.clone(), item);
                     }
                 }
             }
@@ -346,7 +346,7 @@ where
     }
 
     #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
-    pub async fn find_async<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> T
+    pub async fn find_async<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, T)
     where
         KF: FnMut(&K) -> bool,
         F: FnMut(&T) -> bool,
@@ -371,7 +371,7 @@ where
                     if key_fn(key)
                         && let Some(item) = self.queues[*index].try_find(&mut find_fn)
                     {
-                        return item;
+                        return (key.clone(), item);
                     }
                 }
             }
