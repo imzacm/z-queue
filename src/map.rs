@@ -76,6 +76,10 @@ where
         Self::new_with_hasher(key_capacity, None, hasher)
     }
 
+    pub fn total_len(&self) -> usize {
+        self.queues.iter().map(|(_, q)| q.len()).sum()
+    }
+
     pub fn len(&self, key: &K) -> usize {
         if let Some(&index) = self.key_index_map.read().get(key) {
             return self.queues[index].len();
