@@ -455,4 +455,18 @@ where
         }
         drop(lock);
     }
+
+    #[cfg(feature = "rand")]
+    pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
+        for (_, queue) in self.queues.iter() {
+            queue.rand_shuffle(rng);
+        }
+    }
+
+    #[cfg(feature = "fastrand")]
+    pub fn fastrand_shuffle(&self) {
+        for (_, queue) in self.queues.iter() {
+            queue.fastrand_shuffle();
+        }
+    }
 }
