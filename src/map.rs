@@ -1,6 +1,6 @@
 use core::hash::{BuildHasher, Hash};
+use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::num::NonZeroUsize;
 
 use boxcar::Vec;
 use crossbeam_utils::CachePadded;

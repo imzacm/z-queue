@@ -1,29 +1,25 @@
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 use event_listener::{Event, Listener};
-use parking_lot::Mutex;
 
-use crate::container::Container;
+use crate::container::{Container, ContainerTrait};
 
 pub const MAX_SMALL_CAPACITY: usize = 1024;
-const SEGMENT_SIZE: usize = 64;
 
 #[derive(Debug)]
-pub struct ZQueue<T> {
-    container: CachePadded<Mutex<Container<T, SEGMENT_SIZE>>>,
-    len: AtomicUsize,
-    capacity: Option<usize>,
+pub struct ZQueue<T, C: ContainerTrait<T> = Container<T>> {
+    container: C,
     // Notified on push.
     push_event: CachePadded<Event>,
     // Notified on pop.
     pub(crate) pop_event: CachePadded<Event>,
     // All waiters are notified on every push.
     find_waiter: CachePadded<Event>,
+    _marker: core::marker::PhantomData<T>,
 }
 
-impl<T> ZQueue<T> {
+impl<T> ZQueue<T, Container<T>> {
     pub fn new<C>(capacity: C) -> Self
     where
         C: Into<Option<usize>>,
@@ -37,86 +33,91 @@ impl<T> ZQueue<T> {
 
     pub fn bounded(capacity: usize) -> Self {
         let container = if capacity <= MAX_SMALL_CAPACITY {
-            Container::new_vec_deque(capacity)
+            Container::new_vec_dequeue(Some(capacity))
         } else {
-            Container::new_segmented_array()
+            Container::new_segmented_array(Some(capacity))
         };
-        Self::new_inner(container, Some(capacity))
+        Self::with_container(container)
     }
 
     pub fn unbounded() -> Self {
-        Self::new_inner(Container::new_segmented_array(), None)
+        Self::with_container(Container::new_segmented_array(None))
     }
 
-    fn new_inner(container: Container<T, SEGMENT_SIZE>, capacity: Option<usize>) -> Self {
+    pub fn new_crossbeam<C>(capacity: C) -> Self
+    where
+        C: Into<Option<usize>>,
+    {
+        if let Some(capacity) = capacity.into() {
+            Self::bounded_crossbeam(capacity)
+        } else {
+            Self::unbounded_crossbeam()
+        }
+    }
+
+    pub fn bounded_crossbeam(capacity: usize) -> Self {
+        Self::with_container(Container::new_crossbeam_array(capacity))
+    }
+
+    pub fn unbounded_crossbeam() -> Self {
+        Self::with_container(Container::new_crossbeam_seg())
+    }
+}
+
+impl<T, C> ZQueue<T, C>
+where
+    C: ContainerTrait<T>,
+{
+    pub fn with_container(container: C) -> Self {
         Self {
-            container: CachePadded::new(Mutex::new(container)),
-            len: AtomicUsize::new(0),
-            capacity,
+            container,
             push_event: CachePadded::new(Event::new()),
             pop_event: CachePadded::new(Event::new()),
             find_waiter: CachePadded::new(Event::new()),
+            _marker: core::marker::PhantomData,
         }
     }
 
     pub fn len(&self) -> usize {
-        self.len.load(Ordering::Relaxed)
+        self.container.len()
     }
 
     pub fn capacity(&self) -> Option<usize> {
-        self.capacity
+        self.container.capacity()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len.load(Ordering::Relaxed) == 0
+        self.container.is_empty()
     }
 
     pub fn is_full(&self) -> bool {
-        self.capacity.is_some_and(|v| v <= self.len())
+        self.container.is_full()
     }
 
     pub fn clear(&self) {
-        self.container.lock().clear();
-        let removed = self.len.swap(0, Ordering::AcqRel);
+        let removed = self.container.clear();
         self.pop_event.notify(removed);
     }
 
     pub fn try_push(&self, item: T) -> Result<(), T> {
-        if self.is_full() {
-            return Err(item);
-        }
-
-        {
-            let mut lock = self.container.lock();
-
-            if self.is_full() {
-                return Err(item);
-            }
-
-            lock.push(item);
-            self.len.fetch_add(1, Ordering::Relaxed);
-        }
+        self.container.push(item)?;
 
         self.push_event.notify(1);
         self.find_waiter.notify(usize::MAX);
         Ok(())
     }
 
-    pub fn push(&self, item: T) {
+    pub fn push(&self, mut item: T) {
         loop {
             let listener = self.pop_event.listen();
 
-            {
-                let mut lock = self.container.lock();
-
-                if !self.is_full() {
-                    lock.push(item);
-                    self.len.fetch_add(1, Ordering::Relaxed);
-                    drop(lock);
+            match self.container.push(item) {
+                Ok(()) => {
                     self.push_event.notify(1);
                     self.find_waiter.notify(usize::MAX);
                     break;
                 }
+                Err(v) => item = v,
             }
 
             let backoff = crossbeam_utils::Backoff::new();
@@ -130,21 +131,17 @@ impl<T> ZQueue<T> {
         }
     }
 
-    pub async fn push_async(&self, item: T) {
+    pub async fn push_async(&self, mut item: T) {
         loop {
             let listener = self.pop_event.listen();
 
-            {
-                let mut lock = self.container.lock();
-
-                if !self.is_full() {
-                    lock.push(item);
-                    self.len.fetch_add(1, Ordering::Relaxed);
-                    drop(lock);
+            match self.container.push(item) {
+                Ok(()) => {
                     self.push_event.notify(1);
                     self.find_waiter.notify(usize::MAX);
                     break;
                 }
+                Err(v) => item = v,
             }
 
             listener.await;
@@ -152,13 +149,8 @@ impl<T> ZQueue<T> {
     }
 
     pub fn try_pop(&self) -> Option<T> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let item = self.container.lock().pop();
+        let item = self.container.pop();
         if item.is_some() {
-            self.len.fetch_sub(1, Ordering::Relaxed);
             self.pop_event.notify(1);
         }
         item
@@ -169,9 +161,8 @@ impl<T> ZQueue<T> {
             let listener = self.push_event.listen();
 
             if !self.is_empty() {
-                let item = self.container.lock().pop();
+                let item = self.container.pop();
                 if let Some(item) = item {
-                    self.len.fetch_sub(1, Ordering::Relaxed);
                     self.pop_event.notify(1);
                     return item;
                 }
@@ -193,9 +184,8 @@ impl<T> ZQueue<T> {
             let listener = self.push_event.listen();
 
             if !self.is_empty() {
-                let item = self.container.lock().pop();
+                let item = self.container.pop();
                 if let Some(item) = item {
-                    self.len.fetch_sub(1, Ordering::Relaxed);
                     self.pop_event.notify(1);
                     return item;
                 }
@@ -213,9 +203,8 @@ impl<T> ZQueue<T> {
             return None;
         }
 
-        let item = self.container.lock().find_pop(find_fn);
+        let item = self.container.find_pop(find_fn);
         if item.is_some() {
-            self.len.fetch_sub(1, Ordering::Relaxed);
             self.pop_event.notify(1);
         }
         item
@@ -229,9 +218,8 @@ impl<T> ZQueue<T> {
             let listener = self.find_waiter.listen();
 
             if !self.is_empty() {
-                let item = self.container.lock().find_pop(&mut find_fn);
+                let item = self.container.find_pop(&mut find_fn);
                 if let Some(item) = item {
-                    self.len.fetch_sub(1, Ordering::Relaxed);
                     self.pop_event.notify(1);
                     return item;
                 }
@@ -249,9 +237,8 @@ impl<T> ZQueue<T> {
             let listener = self.find_waiter.listen();
 
             if !self.is_empty() {
-                let item = self.container.lock().find_pop(&mut find_fn);
+                let item = self.container.find_pop(&mut find_fn);
                 if let Some(item) = item {
-                    self.len.fetch_sub(1, Ordering::Relaxed);
                     self.pop_event.notify(1);
                     return item;
                 }
@@ -277,13 +264,12 @@ impl<T> ZQueue<T> {
                 removed.reserve(len);
             }
 
-            self.container.lock().retain_into(retain_fn, &mut removed);
+            self.container.retain_into(retain_fn, &mut removed);
             removed.len()
         } else {
-            self.container.lock().retain(retain_fn)
+            self.container.retain(retain_fn)
         };
 
-        self.len.fetch_sub(removed, Ordering::Relaxed);
         self.pop_event.notify(removed);
     }
 
@@ -296,12 +282,10 @@ impl<T> ZQueue<T> {
         }
 
         let old_len = into.len();
-        self.container.lock().retain_into(retain_fn, into);
+        self.container.retain_into(retain_fn, into);
         let new_len = into.len();
 
         let removed = old_len - new_len;
-
-        self.len.fetch_sub(removed, Ordering::Relaxed);
         self.pop_event.notify(removed);
     }
 
@@ -311,7 +295,7 @@ impl<T> ZQueue<T> {
             return;
         }
 
-        self.container.lock().rand_shuffle(rng);
+        self.container.rand_shuffle(rng);
     }
 
     #[cfg(feature = "fastrand")]
@@ -320,6 +304,6 @@ impl<T> ZQueue<T> {
             return;
         }
 
-        self.container.lock().fastrand_shuffle();
+        self.container.fastrand_shuffle();
     }
 }

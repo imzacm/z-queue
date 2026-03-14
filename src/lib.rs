@@ -6,7 +6,7 @@ extern crate std;
 
 extern crate alloc;
 
-mod container;
+pub mod container;
 mod map;
 mod queue;
 
