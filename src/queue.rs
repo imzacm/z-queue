@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
@@ -166,11 +167,14 @@ impl<T> ZQueue<T> {
     pub fn pop(&self) -> T {
         loop {
             let listener = self.push_event.listen();
-            let item = self.container.lock().pop();
-            if let Some(item) = item {
-                self.len.fetch_sub(1, Ordering::Relaxed);
-                self.pop_event.notify(1);
-                return item;
+
+            if !self.is_empty() {
+                let item = self.container.lock().pop();
+                if let Some(item) = item {
+                    self.len.fetch_sub(1, Ordering::Relaxed);
+                    self.pop_event.notify(1);
+                    return item;
+                }
             }
 
             let backoff = crossbeam_utils::Backoff::new();
@@ -187,11 +191,14 @@ impl<T> ZQueue<T> {
     pub async fn pop_async(&self) -> T {
         loop {
             let listener = self.push_event.listen();
-            let item = self.container.lock().pop();
-            if let Some(item) = item {
-                self.len.fetch_sub(1, Ordering::Relaxed);
-                self.pop_event.notify(1);
-                return item;
+
+            if !self.is_empty() {
+                let item = self.container.lock().pop();
+                if let Some(item) = item {
+                    self.len.fetch_sub(1, Ordering::Relaxed);
+                    self.pop_event.notify(1);
+                    return item;
+                }
             }
 
             listener.await;
@@ -202,6 +209,10 @@ impl<T> ZQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        if self.is_empty() {
+            return None;
+        }
+
         let item = self.container.lock().find_pop(find_fn);
         if item.is_some() {
             self.len.fetch_sub(1, Ordering::Relaxed);
@@ -216,11 +227,14 @@ impl<T> ZQueue<T> {
     {
         loop {
             let listener = self.find_waiter.listen();
-            let item = self.container.lock().find_pop(&mut find_fn);
-            if let Some(item) = item {
-                self.len.fetch_sub(1, Ordering::Relaxed);
-                self.pop_event.notify(1);
-                return item;
+
+            if !self.is_empty() {
+                let item = self.container.lock().find_pop(&mut find_fn);
+                if let Some(item) = item {
+                    self.len.fetch_sub(1, Ordering::Relaxed);
+                    self.pop_event.notify(1);
+                    return item;
+                }
             }
 
             listener.wait();
@@ -233,11 +247,14 @@ impl<T> ZQueue<T> {
     {
         loop {
             let listener = self.find_waiter.listen();
-            let item = self.container.lock().find_pop(&mut find_fn);
-            if let Some(item) = item {
-                self.len.fetch_sub(1, Ordering::Relaxed);
-                self.pop_event.notify(1);
-                return item;
+
+            if !self.is_empty() {
+                let item = self.container.lock().find_pop(&mut find_fn);
+                if let Some(item) = item {
+                    self.len.fetch_sub(1, Ordering::Relaxed);
+                    self.pop_event.notify(1);
+                    return item;
+                }
             }
 
             listener.await;
@@ -248,7 +265,23 @@ impl<T> ZQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let removed = self.container.lock().retain(retain_fn);
+        if self.is_empty() {
+            return;
+        }
+
+        // Retain into a `Vec<T>` so items are dropped after lock is released.
+        let removed = if core::mem::needs_drop::<T>() {
+            let mut removed = Vec::new();
+            if self.len() <= MAX_SMALL_CAPACITY {
+                removed.reserve(self.len());
+            }
+
+            self.container.lock().retain_into(retain_fn, &mut removed);
+            removed.len()
+        } else {
+            self.container.lock().retain(retain_fn)
+        };
+
         self.len.fetch_sub(removed, Ordering::Relaxed);
         self.pop_event.notify(removed);
     }
