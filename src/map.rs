@@ -76,6 +76,31 @@ where
         Self::new_with_hasher(key_capacity, None, hasher)
     }
 
+    pub fn len(&self, key: &K) -> usize {
+        if let Some(&index) = self.key_index_map.read().get(key) {
+            return self.queues[index].len();
+        }
+        0
+    }
+
+    pub fn capacity(&self) -> Option<NonZeroUsize> {
+        self.capacity
+    }
+
+    pub fn is_empty(&self, key: &K) -> bool {
+        if let Some(&index) = self.key_index_map.read().get(key) {
+            return self.queues[index].is_empty();
+        }
+        true
+    }
+
+    pub fn is_full(&self, key: &K) -> bool {
+        if let Some(&index) = self.key_index_map.read().get(key) {
+            return self.queues[index].is_full();
+        }
+        false
+    }
+
     pub fn clear(&self) {
         for (_, queue) in self.queues.iter() {
             queue.clear();
