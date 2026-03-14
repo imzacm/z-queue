@@ -162,6 +162,38 @@ impl<T, const SEGMENT_SIZE: usize> Container<T, SEGMENT_SIZE> {
             }
         }
     }
+
+    #[cfg(feature = "rand")]
+    pub fn rand_shuffle<R: rand::Rng>(&mut self, rng: &mut R) {
+        use rand::seq::SliceRandom;
+
+        match self {
+            Self::VecDeque { queue, .. } => {
+                queue.make_contiguous().shuffle(rng);
+            }
+            Self::SegmentedArray { queue } => {
+                queue.make_contiguous().shuffle(rng);
+                for block in queue.iter_mut() {
+                    block.shuffle(rng);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "fastrand")]
+    pub fn fastrand_shuffle(&mut self) {
+        match self {
+            Self::VecDeque { queue } => {
+                fastrand::shuffle(queue.make_contiguous());
+            }
+            Self::SegmentedArray { queue } => {
+                fastrand::shuffle(queue.make_contiguous());
+                for block in queue.iter_mut() {
+                    fastrand::shuffle(block);
+                }
+            }
+        }
+    }
 }
 
 fn vec_dequeue_retain_into<T, F>(queue: &mut VecDeque<T>, target: &mut Vec<T>, mut retain_fn: F)

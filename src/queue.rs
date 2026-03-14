@@ -285,4 +285,14 @@ impl<T> ZQueue<T> {
         self.len.fetch_sub(removed, Ordering::Relaxed);
         self.pop_event.notify(removed);
     }
+
+    #[cfg(feature = "rand")]
+    pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
+        self.container.lock().rand_shuffle(rng);
+    }
+
+    #[cfg(feature = "fastrand")]
+    pub fn fastrand_shuffle(&self) {
+        self.container.lock().fastrand_shuffle();
+    }
 }
