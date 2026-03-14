@@ -22,6 +22,7 @@ pub struct ZQueueMap<K, T, S = DefaultHashState> {
     next_key_index: AtomicUsize,
     queues: Vec<ZQueue<T>>,
     capacity: Option<NonZeroUsize>,
+    crossbeam: bool,
     // Notified on push.
     push_event: CachePadded<Event>,
     // All waiters are notified on every push.
@@ -47,6 +48,21 @@ where
     pub fn unbounded(key_capacity: usize) -> Self {
         Self::new(key_capacity, None)
     }
+
+    pub fn new_crossbeam<QC>(key_capacity: usize, queue_capacity: QC) -> Self
+    where
+        QC: Into<Option<NonZeroUsize>>,
+    {
+        Self::new_crossbeam_with_hasher(key_capacity, queue_capacity, S::default())
+    }
+
+    pub fn bounded_crossbeam(key_capacity: usize, capacity: NonZeroUsize) -> Self {
+        Self::new_crossbeam(key_capacity, Some(capacity))
+    }
+
+    pub fn unbounded_crossbeam(key_capacity: usize) -> Self {
+        Self::new_crossbeam(key_capacity, None)
+    }
 }
 
 impl<K, T, S> ZQueueMap<K, T, S>
@@ -63,6 +79,22 @@ where
             next_key_index: AtomicUsize::new(0),
             queues: Vec::with_capacity(key_capacity),
             capacity: queue_capacity.into(),
+            crossbeam: false,
+            push_event: CachePadded::new(Event::new()),
+            find_waiter: CachePadded::new(Event::new()),
+        }
+    }
+
+    pub fn new_crossbeam_with_hasher<QC>(key_capacity: usize, queue_capacity: QC, hasher: S) -> Self
+    where
+        QC: Into<Option<NonZeroUsize>>,
+    {
+        Self {
+            key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
+            next_key_index: AtomicUsize::new(0),
+            queues: Vec::with_capacity(key_capacity),
+            capacity: queue_capacity.into(),
+            crossbeam: true,
             push_event: CachePadded::new(Event::new()),
             find_waiter: CachePadded::new(Event::new()),
         }
@@ -74,6 +106,15 @@ where
 
     pub fn unbounded_with_hasher(key_capacity: usize, hasher: S) -> Self {
         Self::new_with_hasher(key_capacity, None, hasher)
+    }
+
+    fn create_queue(&self) -> ZQueue<T> {
+        let capacity = self.capacity.map(NonZeroUsize::get);
+        if self.crossbeam {
+            ZQueue::new_crossbeam(capacity)
+        } else {
+            ZQueue::new(capacity)
+        }
     }
 
     pub fn total_len(&self) -> usize {
@@ -134,7 +175,7 @@ where
             return result;
         }
 
-        let queue = ZQueue::new(self.capacity.map(NonZeroUsize::get));
+        let queue = self.create_queue();
         queue.push(item);
         let index = self.queues.push(queue);
         lock.insert(key.clone(), index);
@@ -163,7 +204,7 @@ where
             return;
         }
 
-        let queue = ZQueue::new(self.capacity.map(NonZeroUsize::get));
+        let queue = self.create_queue();
         queue.push(item);
         let index = self.queues.push(queue);
         lock.insert(key.clone(), index);
@@ -214,7 +255,7 @@ where
             }
         }
 
-        let queue = ZQueue::new(self.capacity.map(NonZeroUsize::get));
+        let queue = self.create_queue();
         queue.push(item);
         let index = self.queues.push(queue);
         lock.insert(key.clone(), index);
