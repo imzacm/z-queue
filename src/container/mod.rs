@@ -2,6 +2,8 @@ pub mod crossbeam_array;
 pub mod crossbeam_seg;
 pub mod segmented_array;
 pub mod vec_deque;
+#[cfg(feature = "wal")]
+pub mod wal;
 
 use alloc::vec::Vec;
 
