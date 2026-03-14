@@ -288,11 +288,19 @@ impl<T> ZQueue<T> {
 
     #[cfg(feature = "rand")]
     pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
+        if self.is_empty() {
+            return;
+        }
+
         self.container.lock().rand_shuffle(rng);
     }
 
     #[cfg(feature = "fastrand")]
     pub fn fastrand_shuffle(&self) {
+        if self.is_empty() {
+            return;
+        }
+
         self.container.lock().fastrand_shuffle();
     }
 }
