@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use crate::container::Container;
 
-const MAX_SMALL_CAPACITY: usize = 1024;
+pub const MAX_SMALL_CAPACITY: usize = 1024;
 const SEGMENT_SIZE: usize = 64;
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ pub struct ZQueue<T> {
     // Notified on push.
     push_event: CachePadded<Event>,
     // Notified on pop.
-    pop_event: CachePadded<Event>,
+    pub(crate) pop_event: CachePadded<Event>,
     // All waiters are notified on every push.
     find_waiter: CachePadded<Event>,
 }
@@ -77,20 +77,20 @@ impl<T> ZQueue<T> {
 
     pub fn clear(&self) {
         self.container.lock().clear();
-        self.len.store(0, Ordering::Relaxed);
-        self.pop_event.notify(usize::MAX);
+        let removed = self.len.swap(0, Ordering::AcqRel);
+        self.pop_event.notify(removed);
     }
 
-    pub fn try_push(&self, item: T) -> bool {
+    pub fn try_push(&self, item: T) -> Result<(), T> {
         if self.is_full() {
-            return false;
+            return Err(item);
         }
 
         {
             let mut lock = self.container.lock();
 
             if self.is_full() {
-                return false;
+                return Err(item);
             }
 
             lock.push(item);
@@ -99,7 +99,7 @@ impl<T> ZQueue<T> {
 
         self.push_event.notify(1);
         self.find_waiter.notify(usize::MAX);
-        true
+        Ok(())
     }
 
     pub fn push(&self, item: T) {
@@ -272,8 +272,9 @@ impl<T> ZQueue<T> {
         // Retain into a `Vec<T>` so items are dropped after lock is released.
         let removed = if core::mem::needs_drop::<T>() {
             let mut removed = Vec::new();
-            if self.len() <= MAX_SMALL_CAPACITY {
-                removed.reserve(self.len());
+            let len = self.len();
+            if len <= MAX_SMALL_CAPACITY {
+                removed.reserve(len);
             }
 
             self.container.lock().retain_into(retain_fn, &mut removed);
@@ -281,6 +282,24 @@ impl<T> ZQueue<T> {
         } else {
             self.container.lock().retain(retain_fn)
         };
+
+        self.len.fetch_sub(removed, Ordering::Relaxed);
+        self.pop_event.notify(removed);
+    }
+
+    pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<T>)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        if self.is_empty() {
+            return;
+        }
+
+        let old_len = into.len();
+        self.container.lock().retain_into(retain_fn, into);
+        let new_len = into.len();
+
+        let removed = old_len - new_len;
 
         self.len.fetch_sub(removed, Ordering::Relaxed);
         self.pop_event.notify(removed);

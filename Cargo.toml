@@ -9,7 +9,7 @@ default = ["std"]
 hardware-lock-elision = ["parking_lot/hardware-lock-elision"]
 send_guard = ["parking_lot/send_guard"]
 
-std = ["arrayvec/std", "event-listener/std", "crossbeam-utils/std"]
+std = ["arrayvec/std", "event-listener/std", "crossbeam-utils/std", "indexmap/std"]
 parking = ["event-listener/parking"]
 
 rand = ["dep:rand"]
@@ -20,6 +20,10 @@ parking_lot = "0.12"
 arrayvec = { version = "0.7", default-features = false }
 event-listener = { version = "5.4", default-features = false }
 crossbeam-utils = { version = "0.8", default-features = false }
+
+boxcar = "0.2"
+indexmap = { version = "2.13", default-features = false }
+foldhash = { version = "0.2", default-features = false }
 
 rand = { version = "0.10", optional = true }
 fastrand = { version = "2.3", optional = true }
