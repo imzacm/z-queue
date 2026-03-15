@@ -9,6 +9,7 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use crate::ZQueue;
+use crate::container::{Container, CreateBounded, CreateUnbounded};
 use crate::queue::MAX_SMALL_CAPACITY;
 
 #[cfg(feature = "std")]
@@ -17,103 +18,82 @@ pub type DefaultHashState = std::hash::RandomState;
 #[cfg(not(feature = "std"))]
 pub type DefaultHashState = foldhash::fast::FixedState;
 
-pub struct ZQueueMap<K, T, S = DefaultHashState> {
+#[derive(Debug)]
+enum CreateContainer<C> {
+    Unbounded(fn() -> C),
+    Bounded(NonZeroUsize, fn(NonZeroUsize) -> C),
+}
+
+pub struct ZQueueMap<K, C, S = DefaultHashState> {
     key_index_map: RwLock<IndexMap<K, usize, S>>,
     next_key_index: AtomicUsize,
-    queues: Vec<ZQueue<T>>,
-    capacity: Option<NonZeroUsize>,
-    crossbeam: bool,
+    queues: Vec<ZQueue<C>>,
+    create_container: CreateContainer<C>,
     // Notified on push.
     push_event: CachePadded<Event>,
     // All waiters are notified on every push.
     find_waiter: CachePadded<Event>,
 }
 
-impl<K, T, S> ZQueueMap<K, T, S>
+impl<K, C, S> ZQueueMap<K, C, S>
 where
     K: Clone + Eq + Hash,
+    C: Container,
     S: BuildHasher + Default,
 {
-    pub fn new<QC>(key_capacity: usize, queue_capacity: QC) -> Self
+    pub fn bounded(key_capacity: usize, queue_capacity: NonZeroUsize) -> Self
     where
-        QC: Into<Option<NonZeroUsize>>,
+        C: CreateBounded,
     {
-        Self::new_with_hasher(key_capacity, queue_capacity, S::default())
+        Self::bounded_with_hasher(key_capacity, queue_capacity, S::default())
     }
 
-    pub fn bounded(key_capacity: usize, capacity: NonZeroUsize) -> Self {
-        Self::new(key_capacity, Some(capacity))
-    }
-
-    pub fn unbounded(key_capacity: usize) -> Self {
-        Self::new(key_capacity, None)
-    }
-
-    pub fn new_crossbeam<QC>(key_capacity: usize, queue_capacity: QC) -> Self
+    pub fn unbounded(key_capacity: usize) -> Self
     where
-        QC: Into<Option<NonZeroUsize>>,
+        C: CreateUnbounded,
     {
-        Self::new_crossbeam_with_hasher(key_capacity, queue_capacity, S::default())
-    }
-
-    pub fn bounded_crossbeam(key_capacity: usize, capacity: NonZeroUsize) -> Self {
-        Self::new_crossbeam(key_capacity, Some(capacity))
-    }
-
-    pub fn unbounded_crossbeam(key_capacity: usize) -> Self {
-        Self::new_crossbeam(key_capacity, None)
+        Self::unbounded_with_hasher(key_capacity, S::default())
     }
 }
 
-impl<K, T, S> ZQueueMap<K, T, S>
+impl<K, C, S> ZQueueMap<K, C, S>
 where
     K: Clone + Eq + Hash,
+    C: Container,
     S: BuildHasher,
 {
-    pub fn new_with_hasher<QC>(key_capacity: usize, queue_capacity: QC, hasher: S) -> Self
+    pub fn bounded_with_hasher(key_capacity: usize, queue_capacity: NonZeroUsize, hasher: S) -> Self
     where
-        QC: Into<Option<NonZeroUsize>>,
+        C: CreateBounded,
     {
         Self {
             key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
             next_key_index: AtomicUsize::new(0),
             queues: Vec::with_capacity(key_capacity),
-            capacity: queue_capacity.into(),
-            crossbeam: false,
+            create_container: CreateContainer::Bounded(queue_capacity, C::new_bounded),
             push_event: CachePadded::new(Event::new()),
             find_waiter: CachePadded::new(Event::new()),
         }
     }
 
-    pub fn new_crossbeam_with_hasher<QC>(key_capacity: usize, queue_capacity: QC, hasher: S) -> Self
+    pub fn unbounded_with_hasher(key_capacity: usize, hasher: S) -> Self
     where
-        QC: Into<Option<NonZeroUsize>>,
+        C: CreateUnbounded,
     {
         Self {
             key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
             next_key_index: AtomicUsize::new(0),
             queues: Vec::with_capacity(key_capacity),
-            capacity: queue_capacity.into(),
-            crossbeam: true,
+            create_container: CreateContainer::Unbounded(C::new_unbounded),
             push_event: CachePadded::new(Event::new()),
             find_waiter: CachePadded::new(Event::new()),
         }
     }
 
-    pub fn bounded_with_hasher(key_capacity: usize, capacity: NonZeroUsize, hasher: S) -> Self {
-        Self::new_with_hasher(key_capacity, Some(capacity), hasher)
-    }
-
-    pub fn unbounded_with_hasher(key_capacity: usize, hasher: S) -> Self {
-        Self::new_with_hasher(key_capacity, None, hasher)
-    }
-
-    fn create_queue(&self) -> ZQueue<T> {
-        let capacity = self.capacity.map(NonZeroUsize::get);
-        if self.crossbeam {
-            ZQueue::new_crossbeam(capacity)
-        } else {
-            ZQueue::new(capacity)
+    fn create_queue(&self) -> ZQueue<C> {
+        match &self.create_container {
+            CreateContainer::Unbounded(f) => ZQueue::new(f()),
+            CreateContainer::Bounded(cap, f) => ZQueue::new(f(*cap)),
         }
     }
 
@@ -129,7 +109,10 @@ where
     }
 
     pub fn capacity(&self) -> Option<NonZeroUsize> {
-        self.capacity
+        match &self.create_container {
+            CreateContainer::Unbounded(_) => None,
+            CreateContainer::Bounded(cap, _) => Some(*cap),
+        }
     }
 
     pub fn is_empty(&self, key: &K) -> bool {
@@ -152,7 +135,7 @@ where
         }
     }
 
-    pub fn try_push(&self, key: &K, item: T) -> Result<(), T> {
+    pub fn try_push(&self, key: &K, item: C::Item) -> Result<(), C::Item> {
         if let Some(&index) = self.key_index_map.read().get(key) {
             let queue = &self.queues[index];
             let result = queue.try_push(item);
@@ -185,7 +168,7 @@ where
         Ok(())
     }
 
-    pub fn push(&self, key: &K, item: T) {
+    pub fn push(&self, key: &K, item: C::Item) {
         if let Some(&index) = self.key_index_map.read().get(key) {
             let queue = &self.queues[index];
             queue.push(item);
@@ -214,7 +197,7 @@ where
     }
 
     #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
-    pub async fn push_async(&self, key: &K, mut item: T) {
+    pub async fn push_async(&self, key: &K, mut item: C::Item) {
         if let Some(&index) = self.key_index_map.read().get(key) {
             let queue = &self.queues[index];
 
@@ -264,7 +247,7 @@ where
         self.find_waiter.notify(usize::MAX);
     }
 
-    pub fn try_pop<KF>(&self, mut key_fn: KF) -> Option<(K, T)>
+    pub fn try_pop<KF>(&self, mut key_fn: KF) -> Option<(K, C::Item)>
     where
         KF: FnMut(&K) -> bool,
     {
@@ -288,7 +271,7 @@ where
         None
     }
 
-    pub fn pop<KF>(&self, mut key_fn: KF) -> (K, T)
+    pub fn pop<KF>(&self, mut key_fn: KF) -> (K, C::Item)
     where
         KF: FnMut(&K) -> bool,
     {
@@ -322,7 +305,7 @@ where
     }
 
     #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
-    pub async fn pop_async<KF>(&self, mut key_fn: KF) -> (K, T)
+    pub async fn pop_async<KF>(&self, mut key_fn: KF) -> (K, C::Item)
     where
         KF: FnMut(&K) -> bool,
     {
@@ -355,10 +338,10 @@ where
         }
     }
 
-    pub fn try_find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> Option<(K, T)>
+    pub fn try_find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> Option<(K, C::Item)>
     where
         KF: FnMut(&K) -> bool,
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         let lock = self.key_index_map.read();
 
@@ -381,10 +364,10 @@ where
         None
     }
 
-    pub fn find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, T)
+    pub fn find<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, C::Item)
     where
         KF: FnMut(&K) -> bool,
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         loop {
             let listener = self.find_waiter.listen();
@@ -416,10 +399,10 @@ where
     }
 
     #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
-    pub async fn find_async<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, T)
+    pub async fn find_async<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, C::Item)
     where
         KF: FnMut(&K) -> bool,
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         loop {
             let listener = self.find_waiter.listen();
@@ -453,7 +436,7 @@ where
     pub fn retain<KF, F>(&self, mut key_fn: KF, mut retain_fn: F)
     where
         KF: FnMut(&K) -> bool,
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         // Retain into a `Vec<T>` if `T` needs drop, so items are dropped after lock is released.
         let mut removed = alloc::vec::Vec::new();
@@ -463,7 +446,7 @@ where
             if key_fn(key) {
                 let queue = &self.queues[*index];
 
-                if core::mem::needs_drop::<T>() {
+                if core::mem::needs_drop::<C::Item>() {
                     let len = queue.len();
                     if len <= MAX_SMALL_CAPACITY {
                         removed.reserve(len);
@@ -481,10 +464,10 @@ where
         &self,
         mut key_fn: KF,
         mut retain_fn: F,
-        into: &mut alloc::vec::Vec<T>,
+        into: &mut alloc::vec::Vec<C::Item>,
     ) where
         KF: FnMut(&K) -> bool,
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         let lock = self.key_index_map.read();
         for (key, index) in lock.iter() {

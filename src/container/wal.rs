@@ -1,46 +1,49 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use parking_lot::Mutex;
 
-use crate::container::ContainerTrait;
+use crate::container::Container;
 
 #[derive(Debug)]
-pub struct WalContainer<T, E, C> {
-    wal: Mutex<Wal<T, E>>,
+pub struct Wal<C: Container, E> {
+    wal: Mutex<WalState<C::Item, E>>,
     container: C,
 }
 
-impl<T, E, C> WalContainer<T, E, C>
+impl<C, E> Wal<C, E>
 where
-    T: PartialEq,
-    E: Encoding<T>,
-    C: ContainerTrait<T>,
+    C: Container,
+    C::Item: PartialEq,
+    E: Encoding<C::Item>,
 {
     pub fn open<P>(path: P, encoding: E, container: C) -> Result<Self, std::io::Error>
     where
         P: AsRef<Path>,
     {
-        let wal = Wal::open(path, encoding, &container)?;
+        let wal = WalState::open(path, encoding, &container)?;
         Ok(Self { wal: Mutex::new(wal), container })
     }
 }
 
-impl<T, E, C: ContainerTrait<T>> ContainerTrait<T> for WalContainer<T, E, C>
+impl<C, E> Container for Wal<C, E>
 where
-    T: PartialEq,
-    E: Encoding<T>,
-    C: ContainerTrait<T>,
+    C: Container,
+    C::Item: PartialEq,
+    E: Encoding<C::Item>,
 {
+    type Item = C::Item;
+
     fn len(&self) -> usize {
         let lock = self.wal.lock();
         self.container.len() + lock.overflow.len()
     }
 
-    fn capacity(&self) -> Option<usize> {
+    fn capacity(&self) -> Option<NonZeroUsize> {
         self.container.capacity()
     }
 
@@ -48,7 +51,7 @@ where
         self.container.clear()
     }
 
-    fn push(&self, item: T) -> Result<(), T> {
+    fn push(&self, item: Self::Item) -> Result<(), Self::Item> {
         self.wal.lock().push(&item).expect("Failed to write push to WAL");
         let result = self.container.push(item);
         if let Err(item) = &result {
@@ -57,7 +60,7 @@ where
         result
     }
 
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<Self::Item> {
         if let Some(item) = self.wal.lock().pop_overflow() {
             return Some(item);
         }
@@ -67,9 +70,9 @@ where
         Some(item)
     }
 
-    fn find_pop<F>(&self, mut find_fn: F) -> Option<T>
+    fn find_pop<F>(&self, mut find_fn: F) -> Option<Self::Item>
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&Self::Item) -> bool,
     {
         {
             let mut lock = self.wal.lock();
@@ -87,16 +90,16 @@ where
 
     fn retain<F>(&self, retain_fn: F) -> usize
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&Self::Item) -> bool,
     {
         let mut removed = Vec::new();
         self.retain_into(retain_fn, &mut removed);
         removed.len()
     }
 
-    fn retain_into<F>(&self, retain_fn: F, removed: &mut Vec<T>)
+    fn retain_into<F>(&self, retain_fn: F, removed: &mut Vec<Self::Item>)
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&Self::Item) -> bool,
     {
         let old_len = removed.len();
         self.container.retain_into(retain_fn, removed);
@@ -131,7 +134,7 @@ pub trait Encoding<T> {
 }
 
 #[derive(Debug)]
-struct Wal<T, E> {
+struct WalState<T, E> {
     file: File,
     // Items from WAL that didn't fit in queue.
     overflow: VecDeque<T>,
@@ -139,7 +142,7 @@ struct Wal<T, E> {
     buffer: Vec<u8>,
 }
 
-impl<T, E> Wal<T, E>
+impl<T, E> WalState<T, E>
 where
     T: PartialEq,
     E: Encoding<T>,
@@ -147,7 +150,7 @@ where
     fn open<P, C>(path: P, encoding: E, container: &C) -> Result<Self, std::io::Error>
     where
         P: AsRef<Path>,
-        C: ContainerTrait<T>,
+        C: Container<Item = T>,
     {
         let (file, overflow) = open_wal(path.as_ref(), container, &encoding)?;
         Ok(Self { file, overflow, encoding, buffer: Vec::new() })
@@ -197,7 +200,7 @@ fn open_wal<T, E, C>(
 where
     T: PartialEq,
     E: Encoding<T>,
-    C: ContainerTrait<T>,
+    C: Container<Item = T>,
 {
     let mut items = VecDeque::new();
     let mut buffer = Vec::new();

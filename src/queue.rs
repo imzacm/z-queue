@@ -1,14 +1,15 @@
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use crossbeam_utils::CachePadded;
 use event_listener::{Event, Listener};
 
-use crate::container::{Container, ContainerTrait};
+use crate::container::Container;
 
 pub const MAX_SMALL_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
-pub struct ZQueue<T, C: ContainerTrait<T> = Container<T>> {
+pub struct ZQueue<C> {
     container: C,
     // Notified on push.
     push_event: CachePadded<Event>,
@@ -16,73 +17,25 @@ pub struct ZQueue<T, C: ContainerTrait<T> = Container<T>> {
     pub(crate) pop_event: CachePadded<Event>,
     // All waiters are notified on every push.
     find_waiter: CachePadded<Event>,
-    _marker: core::marker::PhantomData<T>,
 }
 
-impl<T> ZQueue<T, Container<T>> {
-    pub fn new<C>(capacity: C) -> Self
-    where
-        C: Into<Option<usize>>,
-    {
-        if let Some(capacity) = capacity.into() {
-            Self::bounded(capacity)
-        } else {
-            Self::unbounded()
-        }
-    }
-
-    pub fn bounded(capacity: usize) -> Self {
-        let container = if capacity <= MAX_SMALL_CAPACITY {
-            Container::new_vec_dequeue(Some(capacity))
-        } else {
-            Container::new_segmented_array(Some(capacity))
-        };
-        Self::with_container(container)
-    }
-
-    pub fn unbounded() -> Self {
-        Self::with_container(Container::new_segmented_array(None))
-    }
-
-    pub fn new_crossbeam<C>(capacity: C) -> Self
-    where
-        C: Into<Option<usize>>,
-    {
-        if let Some(capacity) = capacity.into() {
-            Self::bounded_crossbeam(capacity)
-        } else {
-            Self::unbounded_crossbeam()
-        }
-    }
-
-    pub fn bounded_crossbeam(capacity: usize) -> Self {
-        Self::with_container(Container::new_crossbeam_array(capacity))
-    }
-
-    pub fn unbounded_crossbeam() -> Self {
-        Self::with_container(Container::new_crossbeam_seg())
-    }
-}
-
-impl<T, C> ZQueue<T, C>
-where
-    C: ContainerTrait<T>,
-{
-    pub fn with_container(container: C) -> Self {
+impl<C: Container> ZQueue<C> {
+    pub fn new(container: C) -> Self {
         Self {
             container,
             push_event: CachePadded::new(Event::new()),
             pop_event: CachePadded::new(Event::new()),
             find_waiter: CachePadded::new(Event::new()),
-            _marker: core::marker::PhantomData,
         }
     }
+}
 
+impl<C: Container> ZQueue<C> {
     pub fn len(&self) -> usize {
         self.container.len()
     }
 
-    pub fn capacity(&self) -> Option<usize> {
+    pub fn capacity(&self) -> Option<NonZeroUsize> {
         self.container.capacity()
     }
 
@@ -99,7 +52,7 @@ where
         self.pop_event.notify(removed);
     }
 
-    pub fn try_push(&self, item: T) -> Result<(), T> {
+    pub fn try_push(&self, item: C::Item) -> Result<(), C::Item> {
         self.container.push(item)?;
 
         self.push_event.notify(1);
@@ -107,7 +60,7 @@ where
         Ok(())
     }
 
-    pub fn push(&self, mut item: T) {
+    pub fn push(&self, mut item: C::Item) {
         loop {
             let listener = self.pop_event.listen();
 
@@ -131,7 +84,7 @@ where
         }
     }
 
-    pub async fn push_async(&self, mut item: T) {
+    pub async fn push_async(&self, mut item: C::Item) {
         loop {
             let listener = self.pop_event.listen();
 
@@ -148,7 +101,7 @@ where
         }
     }
 
-    pub fn try_pop(&self) -> Option<T> {
+    pub fn try_pop(&self) -> Option<C::Item> {
         let item = self.container.pop();
         if item.is_some() {
             self.pop_event.notify(1);
@@ -156,7 +109,7 @@ where
         item
     }
 
-    pub fn pop(&self) -> T {
+    pub fn pop(&self) -> C::Item {
         loop {
             let listener = self.push_event.listen();
 
@@ -179,7 +132,7 @@ where
         }
     }
 
-    pub async fn pop_async(&self) -> T {
+    pub async fn pop_async(&self) -> C::Item {
         loop {
             let listener = self.push_event.listen();
 
@@ -195,9 +148,9 @@ where
         }
     }
 
-    pub fn try_find<F>(&self, find_fn: F) -> Option<T>
+    pub fn try_find<F>(&self, find_fn: F) -> Option<C::Item>
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         if self.is_empty() {
             return None;
@@ -210,9 +163,9 @@ where
         item
     }
 
-    pub fn find<F>(&self, mut find_fn: F) -> T
+    pub fn find<F>(&self, mut find_fn: F) -> C::Item
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         loop {
             let listener = self.find_waiter.listen();
@@ -229,9 +182,9 @@ where
         }
     }
 
-    pub async fn find_async<F>(&self, mut find_fn: F) -> T
+    pub async fn find_async<F>(&self, mut find_fn: F) -> C::Item
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         loop {
             let listener = self.find_waiter.listen();
@@ -250,14 +203,14 @@ where
 
     pub fn retain<F>(&self, retain_fn: F)
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         if self.is_empty() {
             return;
         }
 
         // Retain into a `Vec<T>` so items are dropped after lock is released.
-        let removed = if core::mem::needs_drop::<T>() {
+        let removed = if core::mem::needs_drop::<C::Item>() {
             let mut removed = Vec::new();
             let len = self.len();
             if len <= MAX_SMALL_CAPACITY {
@@ -273,9 +226,9 @@ where
         self.pop_event.notify(removed);
     }
 
-    pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<T>)
+    pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<C::Item>)
     where
-        F: FnMut(&T) -> bool,
+        F: FnMut(&C::Item) -> bool,
     {
         if self.is_empty() {
             return;

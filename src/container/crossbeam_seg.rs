@@ -1,33 +1,30 @@
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use crossbeam_queue::SegQueue;
 use parking_lot::RwLock;
 
-use crate::container::ContainerTrait;
+use crate::container::{Container, CreateUnbounded};
 
 #[derive(Debug)]
-pub struct CrossbeamSeqContainer<T> {
+pub struct CrossbeamSegQueue<T> {
     queue: RwLock<SegQueue<T>>,
 }
 
-impl<T> Default for CrossbeamSeqContainer<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> CrossbeamSeqContainer<T> {
-    pub fn new() -> Self {
+impl<T> CreateUnbounded for CrossbeamSegQueue<T> {
+    fn new_unbounded() -> Self {
         Self { queue: RwLock::new(SegQueue::new()) }
     }
 }
 
-impl<T> ContainerTrait<T> for CrossbeamSeqContainer<T> {
+impl<T> Container for CrossbeamSegQueue<T> {
+    type Item = T;
+
     fn len(&self) -> usize {
         self.queue.read().len()
     }
 
-    fn capacity(&self) -> Option<usize> {
+    fn capacity(&self) -> Option<NonZeroUsize> {
         None
     }
 

@@ -1,38 +1,51 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use arrayvec::ArrayVec;
 use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
 
-use crate::container::ContainerTrait;
+use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 #[derive(Debug)]
-pub struct SegmentedArrayContainer<T, const SEGMENT_SIZE: usize> {
+pub struct SegmentedArray<T, const SEGMENT_SIZE: usize> {
     queue: CachePadded<Mutex<VecDeque<ArrayVec<T, SEGMENT_SIZE>>>>,
     len: AtomicUsize,
-    capacity: Option<usize>,
+    capacity: Option<NonZeroUsize>,
 }
 
-impl<T, const SEGMENT_SIZE: usize> SegmentedArrayContainer<T, SEGMENT_SIZE> {
-    pub fn new(capacity: Option<usize>) -> Self {
+impl<T, const SEGMENT_SIZE: usize> CreateBounded for SegmentedArray<T, SEGMENT_SIZE> {
+    fn new_bounded(capacity: NonZeroUsize) -> Self {
         let mut queue = VecDeque::new();
         queue.push_back(ArrayVec::new());
         Self {
             queue: CachePadded::new(Mutex::new(queue)),
             len: AtomicUsize::new(0),
-            capacity,
+            capacity: Some(capacity),
         }
     }
 }
 
-impl<T, const SEGMENT_SIZE: usize> ContainerTrait<T> for SegmentedArrayContainer<T, SEGMENT_SIZE> {
+impl<T, const SEGMENT_SIZE: usize> CreateUnbounded for SegmentedArray<T, SEGMENT_SIZE> {
+    fn new_unbounded() -> Self {
+        Self {
+            queue: CachePadded::new(Mutex::new(VecDeque::new())),
+            len: AtomicUsize::new(0),
+            capacity: None,
+        }
+    }
+}
+
+impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE> {
+    type Item = T;
+
     fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
 
-    fn capacity(&self) -> Option<usize> {
+    fn capacity(&self) -> Option<NonZeroUsize> {
         self.capacity
     }
 

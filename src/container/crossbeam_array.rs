@@ -1,28 +1,32 @@
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use crossbeam_queue::ArrayQueue;
 use parking_lot::RwLock;
 
-use crate::container::ContainerTrait;
+use crate::container::{Container, CreateBounded};
 
 #[derive(Debug)]
-pub struct CrossbeamArrayContainer<T> {
+pub struct CrossbeamArrayQueue<T> {
     queue: RwLock<ArrayQueue<T>>,
 }
 
-impl<T> CrossbeamArrayContainer<T> {
-    pub fn new(capacity: usize) -> Self {
-        Self { queue: RwLock::new(ArrayQueue::new(capacity)) }
+impl<T> CreateBounded for CrossbeamArrayQueue<T> {
+    fn new_bounded(capacity: NonZeroUsize) -> Self {
+        Self { queue: RwLock::new(ArrayQueue::new(capacity.get())) }
     }
 }
 
-impl<T> ContainerTrait<T> for CrossbeamArrayContainer<T> {
+impl<T> Container for CrossbeamArrayQueue<T> {
+    type Item = T;
+
     fn len(&self) -> usize {
         self.queue.read().len()
     }
 
-    fn capacity(&self) -> Option<usize> {
-        Some(self.queue.read().capacity())
+    fn capacity(&self) -> Option<NonZeroUsize> {
+        let capacity = NonZeroUsize::new(self.queue.read().capacity()).unwrap();
+        Some(capacity)
     }
 
     fn clear(&self) -> usize {

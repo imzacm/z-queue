@@ -1,36 +1,49 @@
-use alloc::collections::VecDeque;
+use alloc::collections::VecDeque as RawVecDeque;
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 use parking_lot::Mutex;
 
-use crate::container::ContainerTrait;
+use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 #[derive(Debug)]
-pub struct VecDequeContainer<T> {
-    queue: CachePadded<Mutex<VecDeque<T>>>,
+pub struct VecDeque<T> {
+    queue: CachePadded<Mutex<RawVecDeque<T>>>,
     len: AtomicUsize,
-    capacity: Option<usize>,
+    capacity: Option<NonZeroUsize>,
 }
 
-impl<T> VecDequeContainer<T> {
-    pub fn new(capacity: Option<usize>) -> Self {
-        let cap = capacity.unwrap_or(0);
+impl<T> CreateBounded for VecDeque<T> {
+    fn new_bounded(capacity: NonZeroUsize) -> Self {
+        let cap = capacity.get();
         Self {
-            queue: CachePadded::new(Mutex::new(VecDeque::with_capacity(cap))),
+            queue: CachePadded::new(Mutex::new(RawVecDeque::with_capacity(cap))),
             len: AtomicUsize::new(0),
-            capacity,
+            capacity: Some(capacity),
         }
     }
 }
 
-impl<T> ContainerTrait<T> for VecDequeContainer<T> {
+impl<T> CreateUnbounded for VecDeque<T> {
+    fn new_unbounded() -> Self {
+        Self {
+            queue: CachePadded::new(Mutex::new(RawVecDeque::new())),
+            len: AtomicUsize::new(0),
+            capacity: None,
+        }
+    }
+}
+
+impl<T> Container for VecDeque<T> {
+    type Item = T;
+
     fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
 
-    fn capacity(&self) -> Option<usize> {
+    fn capacity(&self) -> Option<NonZeroUsize> {
         self.capacity
     }
 
@@ -104,7 +117,7 @@ impl<T> ContainerTrait<T> for VecDequeContainer<T> {
     }
 }
 
-fn vec_deque_retain_into<T, F>(queue: &mut VecDeque<T>, target: &mut Vec<T>, mut retain_fn: F)
+fn vec_deque_retain_into<T, F>(queue: &mut RawVecDeque<T>, target: &mut Vec<T>, mut retain_fn: F)
 where
     F: FnMut(&T) -> bool,
 {
