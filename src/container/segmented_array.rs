@@ -12,7 +12,7 @@ use crate::container::{Container, CreateBounded, CreateUnbounded};
 #[derive(Debug)]
 pub struct SegmentedArray<T, const SEGMENT_SIZE: usize> {
     queue: CachePadded<Mutex<VecDeque<ArrayVec<T, SEGMENT_SIZE>>>>,
-    len: AtomicUsize,
+    len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
 
@@ -22,7 +22,7 @@ impl<T, const SEGMENT_SIZE: usize> CreateBounded for SegmentedArray<T, SEGMENT_S
         queue.push_back(ArrayVec::new());
         Self {
             queue: CachePadded::new(Mutex::new(queue)),
-            len: AtomicUsize::new(0),
+            len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
     }
@@ -32,7 +32,7 @@ impl<T, const SEGMENT_SIZE: usize> CreateUnbounded for SegmentedArray<T, SEGMENT
     fn new_unbounded() -> Self {
         Self {
             queue: CachePadded::new(Mutex::new(VecDeque::new())),
-            len: AtomicUsize::new(0),
+            len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }
     }

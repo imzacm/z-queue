@@ -11,7 +11,6 @@ pub struct Swap<C, const N: usize> {
     containers: [C; N],
     push_index: CachePadded<AtomicUsize>,
     pop_index: CachePadded<AtomicUsize>,
-    len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
 
@@ -28,7 +27,6 @@ where
             containers,
             push_index: CachePadded::new(AtomicUsize::new(0)),
             pop_index: CachePadded::new(AtomicUsize::new(0)),
-            len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
     }
@@ -44,7 +42,6 @@ where
             containers,
             push_index: CachePadded::new(AtomicUsize::new(0)),
             pop_index: CachePadded::new(AtomicUsize::new(0)),
-            len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }
     }
@@ -57,7 +54,7 @@ where
     type Item = C::Item;
 
     fn len(&self) -> usize {
-        self.len.load(Ordering::Relaxed)
+        self.containers.iter().map(|c| c.len()).sum()
     }
 
     fn capacity(&self) -> Option<NonZeroUsize> {
@@ -67,9 +64,7 @@ where
     fn clear(&self) -> usize {
         let mut removed = 0;
         for container in &self.containers {
-            let removed_count = container.clear();
-            self.len.fetch_sub(removed_count, Ordering::Relaxed);
-            removed += removed_count;
+            removed += container.clear();
         }
         removed
     }
@@ -84,10 +79,7 @@ where
             let index = (start_index + index) % N;
             let container = &self.containers[index];
             match container.push(item) {
-                Ok(()) => {
-                    self.len.fetch_add(1, Ordering::Relaxed);
-                    return Ok(());
-                }
+                Ok(()) => return Ok(()),
                 Err(v) => item = v,
             }
         }
@@ -101,7 +93,6 @@ where
             let index = (start_index + index) % N;
             let container = &self.containers[index];
             if let Some(item) = container.pop() {
-                self.len.fetch_sub(1, Ordering::Relaxed);
                 return Some(item);
             }
         }
@@ -117,7 +108,6 @@ where
             let index = (start_index + index) % N;
             let container = &self.containers[index];
             if let Some(item) = container.find_pop(&mut find_fn) {
-                self.len.fetch_sub(1, Ordering::Relaxed);
                 return Some(item);
             }
         }
@@ -130,9 +120,7 @@ where
     {
         let mut removed = 0;
         for container in &self.containers {
-            let removed_count = container.retain(&mut retain_fn);
-            self.len.fetch_sub(removed_count, Ordering::Relaxed);
-            removed += removed_count;
+            removed += container.retain(&mut retain_fn);
         }
         removed
     }
@@ -142,10 +130,7 @@ where
         F: FnMut(&Self::Item) -> bool,
     {
         for container in &self.containers {
-            let old_len = removed.len();
             container.retain_into(&mut retain_fn, removed);
-            let new_len = removed.len();
-            self.len.fetch_sub(new_len - old_len, Ordering::Relaxed);
         }
     }
 
