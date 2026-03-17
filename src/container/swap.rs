@@ -134,6 +134,15 @@ where
         }
     }
 
+    fn visit<F>(&self, mut visit_fn: F)
+    where
+        F: FnMut(&Self::Item),
+    {
+        for container in &self.containers {
+            container.visit(&mut visit_fn);
+        }
+    }
+
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         for container in &self.containers {

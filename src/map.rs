@@ -480,6 +480,17 @@ where
         drop(lock);
     }
 
+    pub fn visit<F>(&self, mut visit_fn: F)
+    where
+        F: FnMut(&K, &C::Item),
+    {
+        let lock = self.key_index_map.read();
+        for (key, index) in lock.iter() {
+            let queue = &self.queues[*index];
+            queue.visit(|item| visit_fn(key, item));
+        }
+    }
+
     #[cfg(feature = "rand")]
     pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         for (_, queue) in self.queues.iter() {

@@ -180,6 +180,18 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
         self.len.fetch_sub(removed, Ordering::Release);
     }
 
+    fn visit<F>(&self, mut visit_fn: F)
+    where
+        F: FnMut(&Self::Item),
+    {
+        let lock = self.queue.lock();
+        for block in lock.iter() {
+            for item in block.iter() {
+                visit_fn(item);
+            }
+        }
+    }
+
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;

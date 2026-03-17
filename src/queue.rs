@@ -280,6 +280,13 @@ impl<C: Container> ZQueue<C> {
         self.pop_event.notify(removed);
     }
 
+    pub fn visit<F>(&self, visit_fn: F)
+    where
+        F: FnMut(&C::Item),
+    {
+        self.container.visit(visit_fn);
+    }
+
     #[cfg(feature = "rand")]
     pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         if self.is_empty() {

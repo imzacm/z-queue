@@ -58,6 +58,11 @@ pub trait Container {
     where
         F: FnMut(&Self::Item) -> bool;
 
+    /// Visit each item in the container. Order is not guaranteed.
+    fn visit<F>(&self, visit_fn: F)
+    where
+        F: FnMut(&Self::Item);
+
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R);
 

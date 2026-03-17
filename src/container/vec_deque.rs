@@ -105,6 +105,16 @@ impl<T> Container for VecDeque<T> {
         self.len.store(lock.len(), Ordering::Release);
     }
 
+    fn visit<F>(&self, mut visit_fn: F)
+    where
+        F: FnMut(&Self::Item),
+    {
+        let lock = self.queue.lock();
+        for item in lock.iter() {
+            visit_fn(item);
+        }
+    }
+
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;

@@ -94,6 +94,19 @@ impl<T> Container for CrossbeamArrayQueue<T> {
         }
     }
 
+    fn visit<F>(&self, mut visit_fn: F)
+    where
+        F: FnMut(&Self::Item),
+    {
+        for _ in 0..self.queue.len() {
+            let Some(item) = self.queue.pop() else { break };
+            visit_fn(&item);
+            if self.queue.push(item).is_err() {
+                panic!("ArrayQueue container is full");
+            }
+        }
+    }
+
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;
