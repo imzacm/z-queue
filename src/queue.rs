@@ -4,7 +4,7 @@ use core::num::NonZeroUsize;
 use crossbeam_utils::CachePadded;
 use event_listener::{Event, Listener};
 
-use crate::container::Container;
+use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 pub const MAX_SMALL_CAPACITY: usize = 1024;
 
@@ -27,6 +27,20 @@ impl<C: Container> ZQueue<C> {
             pop_event: CachePadded::new(Event::new()),
             find_waiter: CachePadded::new(Event::new()),
         }
+    }
+
+    pub fn bounded(capacity: NonZeroUsize) -> Self
+    where
+        C: CreateBounded,
+    {
+        Self::new(C::new_bounded(capacity))
+    }
+
+    pub fn unbounded() -> Self
+    where
+        C: CreateUnbounded,
+    {
+        Self::new(C::new_unbounded())
     }
 }
 
@@ -61,9 +75,8 @@ impl<C: Container> ZQueue<C> {
     }
 
     pub fn push(&self, mut item: C::Item) {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let listener = self.pop_event.listen();
-
             match self.container.push(item) {
                 Ok(()) => {
                     self.push_event.notify(1);
@@ -73,21 +86,27 @@ impl<C: Container> ZQueue<C> {
                 Err(v) => item = v,
             }
 
-            let backoff = crossbeam_utils::Backoff::new();
-            while self.is_full() {
-                if backoff.is_completed() {
-                    listener.wait();
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
+            }
+
+            let listener = self.pop_event.listen();
+            match self.container.push(item) {
+                Ok(()) => {
+                    self.push_event.notify(1);
+                    self.find_waiter.notify(usize::MAX);
                     break;
                 }
-                backoff.snooze();
+                Err(v) => item = v,
             }
+            listener.wait();
         }
     }
 
     pub async fn push_async(&self, mut item: C::Item) {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let listener = self.pop_event.listen();
-
             match self.container.push(item) {
                 Ok(()) => {
                     self.push_event.notify(1);
@@ -97,53 +116,68 @@ impl<C: Container> ZQueue<C> {
                 Err(v) => item = v,
             }
 
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
+            }
+
+            let listener = self.pop_event.listen();
+            match self.container.push(item) {
+                Ok(()) => {
+                    self.push_event.notify(1);
+                    self.find_waiter.notify(usize::MAX);
+                    break;
+                }
+                Err(v) => item = v,
+            }
             listener.await;
         }
     }
 
     pub fn try_pop(&self) -> Option<C::Item> {
         let item = self.container.pop();
-        if item.is_some() {
+        if item.is_some() && self.capacity().is_some() {
             self.pop_event.notify(1);
         }
         item
     }
 
     pub fn pop(&self) -> C::Item {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let listener = self.push_event.listen();
-
-            if !self.is_empty() {
-                let item = self.container.pop();
-                if let Some(item) = item {
-                    self.pop_event.notify(1);
-                    return item;
-                }
+            if let Some(item) = self.try_pop() {
+                return item;
             }
 
-            let backoff = crossbeam_utils::Backoff::new();
-            while self.is_empty() {
-                if backoff.is_completed() {
-                    listener.wait();
-                    break;
-                }
+            if !backoff.is_completed() {
                 backoff.snooze();
+                continue;
             }
+
+            let listener = self.push_event.listen();
+            if let Some(item) = self.try_pop() {
+                return item;
+            }
+            listener.wait();
         }
     }
 
     pub async fn pop_async(&self) -> C::Item {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let listener = self.push_event.listen();
-
-            if !self.is_empty() {
-                let item = self.container.pop();
-                if let Some(item) = item {
-                    self.pop_event.notify(1);
-                    return item;
-                }
+            if let Some(item) = self.try_pop() {
+                return item;
             }
 
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
+            }
+
+            let listener = self.push_event.listen();
+            if let Some(item) = self.try_pop() {
+                return item;
+            }
             listener.await;
         }
     }
@@ -152,10 +186,6 @@ impl<C: Container> ZQueue<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if self.is_empty() {
-            return None;
-        }
-
         let item = self.container.find_pop(find_fn);
         if item.is_some() {
             self.pop_event.notify(1);
@@ -167,17 +197,21 @@ impl<C: Container> ZQueue<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let listener = self.find_waiter.listen();
-
-            if !self.is_empty() {
-                let item = self.container.find_pop(&mut find_fn);
-                if let Some(item) = item {
-                    self.pop_event.notify(1);
-                    return item;
-                }
+            if let Some(item) = self.try_find(&mut find_fn) {
+                return item;
             }
 
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
+            }
+
+            let listener = self.push_event.listen();
+            if let Some(item) = self.try_find(&mut find_fn) {
+                return item;
+            }
             listener.wait();
         }
     }
@@ -186,17 +220,21 @@ impl<C: Container> ZQueue<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let listener = self.find_waiter.listen();
-
-            if !self.is_empty() {
-                let item = self.container.find_pop(&mut find_fn);
-                if let Some(item) = item {
-                    self.pop_event.notify(1);
-                    return item;
-                }
+            if let Some(item) = self.try_find(&mut find_fn) {
+                return item;
             }
 
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
+            }
+
+            let listener = self.push_event.listen();
+            if let Some(item) = self.try_find(&mut find_fn) {
+                return item;
+            }
             listener.await;
         }
     }

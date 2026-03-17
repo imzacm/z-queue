@@ -3,6 +3,10 @@ name = "z-queue"
 version = "0.1.0"
 edition = "2024"
 
+[[bench]]
+name = "queue_bench"
+harness = false
+
 [features]
 default = ["std"]
 
@@ -30,3 +34,9 @@ foldhash = { version = "0.2", default-features = false }
 
 rand = { version = "0.10", optional = true }
 fastrand = { version = "2.3", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["async_tokio"] }
+tokio = { version = "1", features = ["full"] }
+flume = "0.12"
+crossbeam-channel = "0.5"

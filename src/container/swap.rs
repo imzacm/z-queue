@@ -74,7 +74,7 @@ where
             return Err(item);
         }
 
-        let start_index = self.push_index.fetch_add(1, Ordering::Relaxed);
+        let start_index = self.push_index.fetch_add(1, Ordering::Release);
         for index in 0..N {
             let index = (start_index + index) % N;
             let container = &self.containers[index];
@@ -88,7 +88,7 @@ where
     }
 
     fn pop(&self) -> Option<Self::Item> {
-        let start_index = self.pop_index.fetch_add(1, Ordering::Relaxed);
+        let start_index = self.pop_index.fetch_add(1, Ordering::Release);
         for index in 0..N {
             let index = (start_index + index) % N;
             let container = &self.containers[index];

@@ -30,8 +30,10 @@ impl<T, const SEGMENT_SIZE: usize> CreateBounded for SegmentedArray<T, SEGMENT_S
 
 impl<T, const SEGMENT_SIZE: usize> CreateUnbounded for SegmentedArray<T, SEGMENT_SIZE> {
     fn new_unbounded() -> Self {
+        let mut queue = VecDeque::new();
+        queue.push_back(ArrayVec::new());
         Self {
-            queue: CachePadded::new(Mutex::new(VecDeque::new())),
+            queue: CachePadded::new(Mutex::new(queue)),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }
@@ -42,7 +44,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     type Item = T;
 
     fn len(&self) -> usize {
-        self.len.load(Ordering::Relaxed)
+        self.len.load(Ordering::SeqCst)
     }
 
     fn capacity(&self) -> Option<NonZeroUsize> {
@@ -53,15 +55,15 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
         let mut lock = self.queue.lock();
         lock.clear();
         lock.push_back(ArrayVec::new());
-        self.len.swap(0, Ordering::AcqRel)
+        self.len.swap(0, Ordering::Acquire)
     }
 
     fn push(&self, item: T) -> Result<(), T> {
-        let mut lock = self.queue.lock();
         if self.is_full() {
             return Err(item);
         }
 
+        let mut lock = self.queue.lock();
         let back = lock.back_mut().expect("Queue always has at least one block");
 
         if back.is_full() {
@@ -74,25 +76,26 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
             back.push(item);
         }
 
-        self.len.fetch_add(1, Ordering::Relaxed);
+        self.len.fetch_add(1, Ordering::Release);
         Ok(())
     }
 
     fn pop(&self) -> Option<T> {
         let mut lock = self.queue.lock();
-        let front = lock.front_mut().expect("Queue always has at least one block");
+        loop {
+            let front = lock.front_mut().expect("Queue always has at least one block");
 
-        if !front.is_empty() {
-            return Some(front.remove(0));
-        }
+            if !front.is_empty() {
+                self.len.fetch_sub(1, Ordering::Release);
+                return Some(front.remove(0));
+            }
 
-        if lock.len() > 1 {
+            if lock.len() == 1 {
+                return None;
+            }
+
             lock.pop_front();
-            // Recurse once to pop from the new front block
-            return self.pop();
         }
-
-        None
     }
 
     fn find_pop<F>(&self, mut find_fn: F) -> Option<T>
@@ -123,7 +126,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
         }
 
         if item.is_some() {
-            self.len.fetch_sub(1, Ordering::Relaxed);
+            self.len.fetch_sub(1, Ordering::Release);
         }
 
         item
@@ -152,7 +155,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
             lock.push_back(ArrayVec::new());
         }
 
-        self.len.fetch_sub(removed, Ordering::Relaxed);
+        self.len.fetch_sub(removed, Ordering::Release);
         removed
     }
 
@@ -173,8 +176,8 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
         }
 
         let new_len = removed.len();
-        let removed = old_len - new_len;
-        self.len.fetch_sub(removed, Ordering::Relaxed);
+        let removed = new_len - old_len;
+        self.len.fetch_sub(removed, Ordering::Release);
     }
 
     #[cfg(feature = "rand")]

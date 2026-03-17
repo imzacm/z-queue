@@ -37,7 +37,7 @@ pub trait Container {
     }
 
     fn is_full(&self) -> bool {
-        self.capacity().is_none_or(|cap| self.len() >= cap.get())
+        self.capacity().is_some_and(|cap| self.len() >= cap.get())
     }
 
     fn clear(&self) -> usize;

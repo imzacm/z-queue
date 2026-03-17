@@ -2,18 +2,17 @@ use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
 use crossbeam_queue::SegQueue;
-use parking_lot::RwLock;
 
 use crate::container::{Container, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct CrossbeamSegQueue<T> {
-    queue: RwLock<SegQueue<T>>,
+    queue: SegQueue<T>,
 }
 
 impl<T> CreateUnbounded for CrossbeamSegQueue<T> {
     fn new_unbounded() -> Self {
-        Self { queue: RwLock::new(SegQueue::new()) }
+        Self { queue: SegQueue::new() }
     }
 }
 
@@ -21,7 +20,7 @@ impl<T> Container for CrossbeamSegQueue<T> {
     type Item = T;
 
     fn len(&self) -> usize {
-        self.queue.read().len()
+        self.queue.len()
     }
 
     fn capacity(&self) -> Option<NonZeroUsize> {
@@ -29,34 +28,32 @@ impl<T> Container for CrossbeamSegQueue<T> {
     }
 
     fn clear(&self) -> usize {
-        let lock = self.queue.read();
         let mut removed = 0;
-        while lock.pop().is_some() {
+        while self.queue.pop().is_some() {
             removed += 1;
         }
         removed
     }
 
     fn push(&self, item: T) -> Result<(), T> {
-        self.queue.read().push(item);
+        self.queue.push(item);
         Ok(())
     }
 
     fn pop(&self) -> Option<T> {
-        self.queue.read().pop()
+        self.queue.pop()
     }
 
     fn find_pop<F>(&self, mut find_fn: F) -> Option<T>
     where
         F: FnMut(&T) -> bool,
     {
-        let lock = self.queue.write();
-        for _ in 0..lock.len() {
-            let Some(item) = lock.pop() else { break };
+        for _ in 0..self.queue.len() {
+            let Some(item) = self.queue.pop() else { break };
             if find_fn(&item) {
                 return Some(item);
             }
-            lock.push(item);
+            self.queue.push(item);
         }
         None
     }
@@ -65,12 +62,11 @@ impl<T> Container for CrossbeamSegQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let lock = self.queue.write();
         let mut removed = 0;
-        for _ in 0..lock.len() {
-            let Some(item) = lock.pop() else { break };
+        for _ in 0..self.queue.len() {
+            let Some(item) = self.queue.pop() else { break };
             if retain_fn(&item) {
-                lock.push(item);
+                self.queue.push(item);
             } else {
                 removed += 1;
             }
@@ -82,11 +78,10 @@ impl<T> Container for CrossbeamSegQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let lock = self.queue.write();
-        for _ in 0..lock.len() {
-            let Some(item) = lock.pop() else { break };
+        for _ in 0..self.queue.len() {
+            let Some(item) = self.queue.pop() else { break };
             if retain_fn(&item) {
-                lock.push(item);
+                self.queue.push(item);
             } else {
                 removed.push(item);
             }
@@ -97,27 +92,25 @@ impl<T> Container for CrossbeamSegQueue<T> {
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;
 
-        let lock = self.queue.write();
-        let mut items = Vec::with_capacity(lock.len());
-        while let Some(item) = lock.pop() {
+        let mut items = Vec::with_capacity(self.queue.len());
+        while let Some(item) = self.queue.pop() {
             items.push(item);
         }
         items.shuffle(rng);
         for item in items {
-            lock.push(item);
+            self.queue.push(item);
         }
     }
 
     #[cfg(feature = "fastrand")]
     fn fastrand_shuffle(&self) {
-        let lock = self.queue.write();
-        let mut items = Vec::with_capacity(lock.len());
-        while let Some(item) = lock.pop() {
+        let mut items = Vec::with_capacity(self.queue.len());
+        while let Some(item) = self.queue.pop() {
             items.push(item);
         }
         fastrand::shuffle(&mut items);
         for item in items {
-            lock.push(item);
+            self.queue.push(item);
         }
     }
 }

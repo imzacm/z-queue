@@ -11,7 +11,7 @@ use crate::container::{Container, CreateBounded, CreateUnbounded};
 #[derive(Debug)]
 pub struct VecDeque<T> {
     queue: CachePadded<Mutex<RawVecDeque<T>>>,
-    len: AtomicUsize,
+    len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
 
@@ -20,7 +20,7 @@ impl<T> CreateBounded for VecDeque<T> {
         let cap = capacity.get();
         Self {
             queue: CachePadded::new(Mutex::new(RawVecDeque::with_capacity(cap))),
-            len: AtomicUsize::new(0),
+            len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
     }
@@ -30,7 +30,7 @@ impl<T> CreateUnbounded for VecDeque<T> {
     fn new_unbounded() -> Self {
         Self {
             queue: CachePadded::new(Mutex::new(RawVecDeque::new())),
-            len: AtomicUsize::new(0),
+            len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }
     }
@@ -40,7 +40,7 @@ impl<T> Container for VecDeque<T> {
     type Item = T;
 
     fn len(&self) -> usize {
-        self.len.load(Ordering::Relaxed)
+        self.len.load(Ordering::Acquire)
     }
 
     fn capacity(&self) -> Option<NonZeroUsize> {
@@ -54,12 +54,13 @@ impl<T> Container for VecDeque<T> {
     }
 
     fn push(&self, item: T) -> Result<(), T> {
-        let mut lock = self.queue.lock();
         if self.is_full() {
             return Err(item);
         }
+
+        let mut lock = self.queue.lock();
         lock.push_back(item);
-        self.len.fetch_add(1, Ordering::Relaxed);
+        self.len.fetch_add(1, Ordering::Release);
         Ok(())
     }
 
@@ -67,7 +68,7 @@ impl<T> Container for VecDeque<T> {
         let mut lock = self.queue.lock();
         let item = lock.pop_front();
         if item.is_some() {
-            self.len.fetch_sub(1, Ordering::Relaxed);
+            self.len.fetch_sub(1, Ordering::Release);
         }
         item
     }
@@ -79,7 +80,7 @@ impl<T> Container for VecDeque<T> {
         let mut lock = self.queue.lock();
         let index = lock.iter().position(find_fn)?;
         let item = lock.remove(index)?;
-        self.len.fetch_sub(1, Ordering::Relaxed);
+        self.len.fetch_sub(1, Ordering::Release);
         Some(item)
     }
 
@@ -91,7 +92,7 @@ impl<T> Container for VecDeque<T> {
         let old_len = lock.len();
         lock.retain(retain_fn);
         let new_len = lock.len();
-        self.len.store(new_len, Ordering::Relaxed);
+        self.len.store(new_len, Ordering::Release);
         old_len - new_len
     }
 
@@ -101,7 +102,7 @@ impl<T> Container for VecDeque<T> {
     {
         let mut lock = self.queue.lock();
         vec_deque_retain_into(&mut lock, removed, retain_fn);
-        self.len.store(lock.len(), Ordering::Relaxed);
+        self.len.store(lock.len(), Ordering::Release);
     }
 
     #[cfg(feature = "rand")]
