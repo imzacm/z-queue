@@ -57,12 +57,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
-name = "boxcar"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,6 +696,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "saa"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16c7f49c9d5caa3bf4b3106900484b447b9253fe99670ceb81cb6cb5027855e1"
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -711,10 +711,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "scc"
+version = "3.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3cea477634b93dee5619c6e437e2eae11c1e3730e59bad72af0e09dba9126f"
+dependencies = [
+ "saa",
+ "sdd",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdd"
+version = "4.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6ca0e33fc1ae39e36b2d1fdfc8ee470b26397b642ff87572a59a36ff4f2340b"
 
 [[package]]
 name = "semver"
@@ -1129,7 +1145,6 @@ name = "z-queue"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
- "boxcar",
  "criterion",
  "crossbeam-channel",
  "crossbeam-queue",
@@ -1138,9 +1153,9 @@ dependencies = [
  "fastrand",
  "flume",
  "foldhash 0.2.0",
- "indexmap",
  "parking_lot",
  "rand",
+ "scc",
  "tokio",
 ]
 

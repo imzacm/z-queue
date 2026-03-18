@@ -2,15 +2,12 @@ use core::hash::{BuildHasher, Hash};
 use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use boxcar::Vec;
+use crossbeam_queue::SegQueue;
 use crossbeam_utils::CachePadded;
 use event_listener::{Event, Listener};
-use indexmap::IndexMap;
-use parking_lot::RwLock;
 
 use crate::ZQueue;
 use crate::container::{Container, CreateBounded, CreateUnbounded};
-use crate::queue::MAX_SMALL_CAPACITY;
 
 #[cfg(feature = "std")]
 pub type DefaultHashState = std::hash::RandomState;
@@ -24,11 +21,10 @@ enum CreateContainer<C> {
     Bounded(NonZeroUsize, fn(NonZeroUsize) -> C),
 }
 
-pub struct ZQueueMap<K, C, S = DefaultHashState> {
-    key_index_map: RwLock<IndexMap<K, usize, S>>,
-    next_key_index: AtomicUsize,
+pub struct ZQueueMap<K, C, S: BuildHasher = DefaultHashState> {
+    queues: scc::HashMap<K, ZQueue<C>, S>,
+    ready_keys: SegQueue<K>,
     find_waiters: CachePadded<AtomicUsize>,
-    queues: Vec<ZQueue<C>>,
     create_container: CreateContainer<C>,
     // Notified on push.
     push_event: CachePadded<Event>,
@@ -66,10 +62,9 @@ where
         C: CreateBounded,
     {
         Self {
-            key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
-            next_key_index: AtomicUsize::new(0),
+            queues: scc::HashMap::with_capacity_and_hasher(key_capacity, hasher),
+            ready_keys: SegQueue::new(),
             find_waiters: CachePadded::new(AtomicUsize::new(0)),
-            queues: Vec::with_capacity(key_capacity),
             create_container: CreateContainer::Bounded(queue_capacity, C::new_bounded),
             push_event: CachePadded::new(Event::new()),
         }
@@ -80,10 +75,9 @@ where
         C: CreateUnbounded,
     {
         Self {
-            key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
-            next_key_index: AtomicUsize::new(0),
+            queues: scc::HashMap::with_hasher(hasher),
+            ready_keys: SegQueue::new(),
             find_waiters: CachePadded::new(AtomicUsize::new(0)),
-            queues: Vec::with_capacity(key_capacity),
             create_container: CreateContainer::Unbounded(C::new_unbounded),
             push_event: CachePadded::new(Event::new()),
         }
@@ -97,14 +91,16 @@ where
     }
 
     pub fn total_len(&self) -> usize {
-        self.queues.iter().map(|(_, q)| q.len()).sum()
+        let mut len = 0;
+        self.queues.iter_sync(|_, queue| {
+            len += queue.len();
+            true
+        });
+        len
     }
 
     pub fn len(&self, key: &K) -> usize {
-        if let Some(&index) = self.key_index_map.read().get(key) {
-            return self.queues[index].len();
-        }
-        0
+        self.queues.get_sync(key).map_or(0, |queue| queue.len())
     }
 
     pub fn capacity(&self) -> Option<NonZeroUsize> {
@@ -115,145 +111,48 @@ where
     }
 
     pub fn is_empty(&self, key: &K) -> bool {
-        if let Some(&index) = self.key_index_map.read().get(key) {
-            return self.queues[index].is_empty();
-        }
-        true
+        self.queues.get_sync(key).is_none_or(|queue| queue.is_empty())
     }
 
     pub fn is_full(&self, key: &K) -> bool {
-        if let Some(&index) = self.key_index_map.read().get(key) {
-            return self.queues[index].is_full();
+        if matches!(self.create_container, CreateContainer::Unbounded(_)) {
+            return false;
         }
-        false
+
+        self.queues.get_sync(key).is_some_and(|queue| queue.is_full())
     }
 
     pub fn clear(&self) {
-        for (_, queue) in self.queues.iter() {
-            queue.clear();
-        }
+        self.queues.clear_sync();
     }
 
-    pub fn try_push(&self, key: &K, item: C::Item) -> Result<(), C::Item> {
-        if let Some(&index) = self.key_index_map.read().get(key) {
-            let queue = &self.queues[index];
-            let result = queue.try_push(item);
-            if result.is_ok() {
-                if self.find_waiters.load(Ordering::Relaxed) != 0 {
-                    self.push_event.notify(usize::MAX);
-                } else {
-                    self.push_event.notify_additional(1);
-                }
-            }
-            return result;
-        }
+    pub fn try_push(&self, key: K, item: C::Item) -> Result<(), C::Item> {
+        let queue = self.queues.entry_sync(key.clone()).or_insert_with(|| self.create_queue());
 
-        let mut lock = self.key_index_map.write();
-        if let Some(&index) = lock.get(key) {
-            drop(lock);
-            let queue = &self.queues[index];
-            let result = queue.try_push(item);
-            if result.is_ok() {
-                if self.find_waiters.load(Ordering::Relaxed) != 0 {
-                    self.push_event.notify(usize::MAX);
-                } else {
-                    self.push_event.notify_additional(1);
-                }
-            }
-            return result;
-        }
+        queue.try_push(item)?;
 
-        let queue = self.create_queue();
-        queue.push(item);
-        let index = self.queues.push(queue);
-        lock.insert(key.clone(), index);
-        drop(lock);
+        self.ready_keys.push(key);
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify_additional(find_waiters + 1);
         Ok(())
     }
 
-    pub fn push(&self, key: &K, item: C::Item) {
-        if let Some(&index) = self.key_index_map.read().get(key) {
-            let queue = &self.queues[index];
-            queue.push(item);
-            let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-            self.push_event.notify_additional(find_waiters + 1);
-            return;
-        }
-
-        let mut lock = self.key_index_map.write();
-        if let Some(&index) = lock.get(key) {
-            drop(lock);
-            let queue = &self.queues[index];
-            queue.push(item);
-            let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-            self.push_event.notify_additional(find_waiters + 1);
-            return;
-        }
-
-        let queue = self.create_queue();
+    pub fn push(&self, key: K, item: C::Item) {
+        let queue = self.queues.entry_sync(key.clone()).or_insert_with(|| self.create_queue());
         queue.push(item);
-        let index = self.queues.push(queue);
-        lock.insert(key.clone(), index);
-        drop(lock);
+        self.ready_keys.push(key);
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify_additional(find_waiters + 1);
     }
 
-    #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
-    pub async fn push_async(&self, key: &K, mut item: C::Item) {
-        if let Some(&index) = self.key_index_map.read().get(key) {
-            let queue = &self.queues[index];
-
-            loop {
-                let listener = queue.pop_event.listen();
-
-                match queue.try_push(item) {
-                    Ok(()) => {
-                        if self.find_waiters.load(Ordering::Relaxed) != 0 {
-                            self.push_event.notify(usize::MAX);
-                        } else {
-                            self.push_event.notify_additional(1);
-                        }
-                        return;
-                    }
-                    Err(v) => item = v,
-                }
-
-                listener.await;
-            }
-        }
-
-        let mut lock = self.key_index_map.write();
-        if let Some(&index) = lock.get(key) {
-            drop(lock);
-            let queue = &self.queues[index];
-
-            loop {
-                let listener = queue.pop_event.listen();
-
-                match queue.try_push(item) {
-                    Ok(()) => {
-                        if self.find_waiters.load(Ordering::Relaxed) != 0 {
-                            self.push_event.notify(usize::MAX);
-                        } else {
-                            self.push_event.notify_additional(1);
-                        }
-                        return;
-                    }
-                    Err(v) => item = v,
-                }
-
-                listener.await;
-            }
-        }
-
-        let queue = self.create_queue();
-        queue.push(item);
-        let index = self.queues.push(queue);
-        lock.insert(key.clone(), index);
-        drop(lock);
+    pub async fn push_async(&self, key: K, item: C::Item) {
+        let queue = self
+            .queues
+            .entry_async(key.clone())
+            .await
+            .or_insert_with(|| self.create_queue());
+        queue.push_async(item).await;
+        self.ready_keys.push(key);
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify_additional(find_waiters + 1);
     }
@@ -262,23 +161,18 @@ where
     where
         KF: FnMut(&K) -> bool,
     {
-        let lock = self.key_index_map.read();
-        if lock.is_empty() {
-            return None;
-        }
+        for _ in 0..self.ready_keys.len() {
+            let Some(key) = self.ready_keys.pop() else { break };
+            if !key_fn(&key) {
+                self.ready_keys.push(key);
+                continue;
+            }
 
-        let initial_key_index = self.next_key_index.fetch_add(1, Ordering::Relaxed);
-
-        for index in 0..lock.len() {
-            let key_index = (initial_key_index + index) % lock.len();
-            let (key, index) = lock.get_index(key_index).unwrap();
-            if key_fn(key)
-                && let Some(item) = self.queues[*index].try_pop()
-            {
-                return Some((key.clone(), item));
+            let Some(queue) = self.queues.get_sync(&key) else { continue };
+            if let Some(item) = queue.try_pop() {
+                return Some((key, item));
             }
         }
-
         None
     }
 
@@ -287,27 +181,31 @@ where
         KF: FnMut(&K) -> bool,
     {
         loop {
-            let listener = self.push_event.listen();
-
-            {
-                let lock = self.key_index_map.read();
-
-                if lock.is_empty() {
-                    drop(lock);
-                    listener.wait();
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
                     continue;
                 }
 
-                let initial_key_index = self.next_key_index.fetch_add(1, Ordering::Relaxed);
+                let Some(queue) = self.queues.get_sync(&key) else { continue };
+                if let Some(item) = queue.try_pop() {
+                    return (key, item);
+                }
+            }
 
-                for index in 0..lock.len() {
-                    let key_index = (initial_key_index + index) % lock.len();
-                    let (key, index) = lock.get_index(key_index).unwrap();
-                    if key_fn(key)
-                        && let Some(item) = self.queues[*index].try_pop()
-                    {
-                        return (key.clone(), item);
-                    }
+            let listener = self.push_event.listen();
+
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
+                    continue;
+                }
+
+                let Some(queue) = self.queues.get_sync(&key) else { continue };
+                if let Some(item) = queue.try_pop() {
+                    return (key, item);
                 }
             }
 
@@ -315,33 +213,36 @@ where
         }
     }
 
-    #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
     pub async fn pop_async<KF>(&self, mut key_fn: KF) -> (K, C::Item)
     where
         KF: FnMut(&K) -> bool,
     {
         loop {
-            let listener = self.push_event.listen();
-
-            {
-                let lock = self.key_index_map.read();
-
-                if lock.is_empty() {
-                    drop(lock);
-                    listener.await;
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
                     continue;
                 }
 
-                let initial_key_index = self.next_key_index.fetch_add(1, Ordering::Relaxed);
+                let Some(queue) = self.queues.get_async(&key).await else { continue };
+                if let Some(item) = queue.try_pop() {
+                    return (key, item);
+                }
+            }
 
-                for index in 0..lock.len() {
-                    let key_index = (initial_key_index + index) % lock.len();
-                    let (key, index) = lock.get_index(key_index).unwrap();
-                    if key_fn(key)
-                        && let Some(item) = self.queues[*index].try_pop()
-                    {
-                        return (key.clone(), item);
-                    }
+            let listener = self.push_event.listen();
+
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
+                    continue;
+                }
+
+                let Some(queue) = self.queues.get_async(&key).await else { continue };
+                if let Some(item) = queue.try_pop() {
+                    return (key, item);
                 }
             }
 
@@ -354,21 +255,16 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
-        let lock = self.key_index_map.read();
+        for _ in 0..self.ready_keys.len() {
+            let Some(key) = self.ready_keys.pop() else { break };
+            if !key_fn(&key) {
+                self.ready_keys.push(key);
+                continue;
+            }
 
-        if lock.is_empty() {
-            return None;
-        }
-
-        let initial_key_index = self.next_key_index.fetch_add(1, Ordering::Relaxed);
-
-        for index in 0..lock.len() {
-            let key_index = (initial_key_index + index) % lock.len();
-            let (key, index) = lock.get_index(key_index).unwrap();
-            if key_fn(key)
-                && let Some(item) = self.queues[*index].try_find(&mut find_fn)
-            {
-                return Some((key.clone(), item));
+            let Some(queue) = self.queues.get_sync(&key) else { continue };
+            if let Some(item) = queue.try_find(&mut find_fn) {
+                return Some((key, item));
             }
         }
 
@@ -382,28 +278,33 @@ where
     {
         self.find_waiters.fetch_add(1, Ordering::Release);
         loop {
-            let listener = self.push_event.listen();
-
-            {
-                let lock = self.key_index_map.read();
-
-                if lock.is_empty() {
-                    drop(lock);
-                    listener.wait();
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
                     continue;
                 }
 
-                let initial_key_index = self.next_key_index.fetch_add(1, Ordering::Relaxed);
+                let Some(queue) = self.queues.get_sync(&key) else { continue };
+                if let Some(item) = queue.try_find(&mut find_fn) {
+                    self.find_waiters.fetch_sub(1, Ordering::Release);
+                    return (key, item);
+                }
+            }
 
-                for index in 0..lock.len() {
-                    let key_index = (initial_key_index + index) % lock.len();
-                    let (key, index) = lock.get_index(key_index).unwrap();
-                    if key_fn(key)
-                        && let Some(item) = self.queues[*index].try_find(&mut find_fn)
-                    {
-                        self.find_waiters.fetch_sub(1, Ordering::Release);
-                        return (key.clone(), item);
-                    }
+            let listener = self.push_event.listen();
+
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
+                    continue;
+                }
+
+                let Some(queue) = self.queues.get_sync(&key) else { continue };
+                if let Some(item) = queue.try_find(&mut find_fn) {
+                    self.find_waiters.fetch_sub(1, Ordering::Release);
+                    return (key, item);
                 }
             }
 
@@ -411,7 +312,6 @@ where
         }
     }
 
-    #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
     pub async fn find_async<KF, F>(&self, mut key_fn: KF, mut find_fn: F) -> (K, C::Item)
     where
         KF: FnMut(&K) -> bool,
@@ -419,28 +319,33 @@ where
     {
         self.find_waiters.fetch_add(1, Ordering::Release);
         loop {
-            let listener = self.push_event.listen();
-
-            {
-                let lock = self.key_index_map.read();
-
-                if lock.is_empty() {
-                    drop(lock);
-                    listener.await;
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
                     continue;
                 }
 
-                let initial_key_index = self.next_key_index.fetch_add(1, Ordering::Relaxed);
+                let Some(queue) = self.queues.get_async(&key).await else { continue };
+                if let Some(item) = queue.try_find(&mut find_fn) {
+                    self.find_waiters.fetch_sub(1, Ordering::Release);
+                    return (key, item);
+                }
+            }
 
-                for index in 0..lock.len() {
-                    let key_index = (initial_key_index + index) % lock.len();
-                    let (key, index) = lock.get_index(key_index).unwrap();
-                    if key_fn(key)
-                        && let Some(item) = self.queues[*index].try_find(&mut find_fn)
-                    {
-                        self.find_waiters.fetch_sub(1, Ordering::Release);
-                        return (key.clone(), item);
-                    }
+            let listener = self.push_event.listen();
+
+            for _ in 0..self.ready_keys.len() {
+                let Some(key) = self.ready_keys.pop() else { break };
+                if !key_fn(&key) {
+                    self.ready_keys.push(key);
+                    continue;
+                }
+
+                let Some(queue) = self.queues.get_async(&key).await else { continue };
+                if let Some(item) = queue.try_find(&mut find_fn) {
+                    self.find_waiters.fetch_sub(1, Ordering::Release);
+                    return (key, item);
                 }
             }
 
@@ -453,26 +358,12 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
-        // Retain into a `Vec<T>` if `T` needs drop, so items are dropped after lock is released.
-        let mut removed = alloc::vec::Vec::new();
-
-        let lock = self.key_index_map.read();
-        for (key, index) in lock.iter() {
+        self.queues.iter_sync(|key, queue| {
             if key_fn(key) {
-                let queue = &self.queues[*index];
-
-                if core::mem::needs_drop::<C::Item>() {
-                    let len = queue.len();
-                    if len <= MAX_SMALL_CAPACITY {
-                        removed.reserve(len);
-                    }
-                    queue.retain_into(&mut retain_fn, &mut removed);
-                } else {
-                    queue.retain(&mut retain_fn);
-                }
+                queue.retain(&mut retain_fn);
             }
-        }
-        drop(lock);
+            true
+        });
     }
 
     pub fn retain_into<KF, F>(
@@ -484,39 +375,37 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
-        let lock = self.key_index_map.read();
-        for (key, index) in lock.iter() {
+        self.queues.iter_sync(|key, queue| {
             if key_fn(key) {
-                let queue = &self.queues[*index];
-
                 queue.retain_into(&mut retain_fn, into);
             }
-        }
-        drop(lock);
+            true
+        });
     }
 
     pub fn visit<F>(&self, mut visit_fn: F)
     where
         F: FnMut(&K, &C::Item),
     {
-        let lock = self.key_index_map.read();
-        for (key, index) in lock.iter() {
-            let queue = &self.queues[*index];
+        self.queues.iter_sync(|key, queue| {
             queue.visit(|item| visit_fn(key, item));
-        }
+            true
+        });
     }
 
     #[cfg(feature = "rand")]
     pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
-        for (_, queue) in self.queues.iter() {
+        self.queues.iter_sync(|_, queue| {
             queue.rand_shuffle(rng);
-        }
+            true
+        });
     }
 
     #[cfg(feature = "fastrand")]
     pub fn fastrand_shuffle(&self) {
-        for (_, queue) in self.queues.iter() {
+        self.queues.iter_sync(|_, queue| {
             queue.fastrand_shuffle();
-        }
+            true
+        });
     }
 }
