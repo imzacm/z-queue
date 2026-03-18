@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 use event_listener::{Event, Listener};
@@ -11,21 +12,23 @@ pub const MAX_SMALL_CAPACITY: usize = 1024;
 #[derive(Debug)]
 pub struct ZQueue<C> {
     container: C,
+    has_capacity: bool,
+    find_waiters: CachePadded<AtomicUsize>,
     // Notified on push.
     push_event: CachePadded<Event>,
     // Notified on pop.
     pub(crate) pop_event: CachePadded<Event>,
-    // All waiters are notified on every push.
-    find_waiter: CachePadded<Event>,
 }
 
 impl<C: Container> ZQueue<C> {
     pub fn new(container: C) -> Self {
+        let has_capacity = container.capacity().is_some();
         Self {
             container,
+            has_capacity,
+            find_waiters: CachePadded::new(AtomicUsize::new(0)),
             push_event: CachePadded::new(Event::new()),
             pop_event: CachePadded::new(Event::new()),
-            find_waiter: CachePadded::new(Event::new()),
         }
     }
 
@@ -45,44 +48,59 @@ impl<C: Container> ZQueue<C> {
 }
 
 impl<C: Container> ZQueue<C> {
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.container.len()
     }
 
+    #[inline(always)]
     pub fn capacity(&self) -> Option<NonZeroUsize> {
         self.container.capacity()
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.container.is_empty()
     }
 
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.container.is_full()
     }
 
+    #[inline(always)]
     pub fn clear(&self) {
         let removed = self.container.clear();
-        self.pop_event.notify(removed);
+        if self.has_capacity && removed > 0 {
+            self.pop_event.notify(removed);
+        }
     }
 
+    #[inline(always)]
     pub fn try_push(&self, item: C::Item) -> Result<(), C::Item> {
         self.container.push(item)?;
 
-        self.push_event.notify(1);
-        self.find_waiter.notify(usize::MAX);
+        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+        self.push_event.notify_additional(find_waiters + 1);
         Ok(())
     }
 
     pub fn push(&self, mut item: C::Item) {
+        if !self.has_capacity {
+            let result = self.try_push(item);
+            debug_assert!(result.is_ok(), "Unbounded container failed to push");
+            return;
+        }
+
+        match self.try_push(item) {
+            Ok(()) => return,
+            Err(v) => item = v,
+        }
+
         let backoff = crossbeam_utils::Backoff::new();
         loop {
-            match self.container.push(item) {
-                Ok(()) => {
-                    self.push_event.notify(1);
-                    self.find_waiter.notify(usize::MAX);
-                    break;
-                }
+            match self.try_push(item) {
+                Ok(()) => return,
                 Err(v) => item = v,
             }
 
@@ -92,57 +110,52 @@ impl<C: Container> ZQueue<C> {
             }
 
             let listener = self.pop_event.listen();
-            match self.container.push(item) {
-                Ok(()) => {
-                    self.push_event.notify(1);
-                    self.find_waiter.notify(usize::MAX);
-                    break;
-                }
+            match self.try_push(item) {
+                Ok(()) => return,
                 Err(v) => item = v,
             }
+
             listener.wait();
         }
     }
 
     pub async fn push_async(&self, mut item: C::Item) {
-        let backoff = crossbeam_utils::Backoff::new();
-        loop {
-            match self.container.push(item) {
-                Ok(()) => {
-                    self.push_event.notify(1);
-                    self.find_waiter.notify(usize::MAX);
-                    break;
-                }
-                Err(v) => item = v,
-            }
+        if !self.has_capacity {
+            let result = self.try_push(item);
+            debug_assert!(result.is_ok(), "Unbounded container failed to push");
+            return;
+        }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
-                continue;
+        loop {
+            match self.try_push(item) {
+                Ok(()) => return,
+                Err(v) => item = v,
             }
 
             let listener = self.pop_event.listen();
-            match self.container.push(item) {
-                Ok(()) => {
-                    self.push_event.notify(1);
-                    self.find_waiter.notify(usize::MAX);
-                    break;
-                }
+            match self.try_push(item) {
+                Ok(()) => return,
                 Err(v) => item = v,
             }
+
             listener.await;
         }
     }
 
+    #[inline(always)]
     pub fn try_pop(&self) -> Option<C::Item> {
         let item = self.container.pop();
-        if item.is_some() && self.capacity().is_some() {
-            self.pop_event.notify(1);
+        if item.is_some() && self.has_capacity {
+            self.pop_event.notify_additional(1);
         }
         item
     }
 
     pub fn pop(&self) -> C::Item {
+        if let Some(item) = self.try_pop() {
+            return item;
+        }
+
         let backoff = crossbeam_utils::Backoff::new();
         loop {
             if let Some(item) = self.try_pop() {
@@ -163,32 +176,28 @@ impl<C: Container> ZQueue<C> {
     }
 
     pub async fn pop_async(&self) -> C::Item {
-        let backoff = crossbeam_utils::Backoff::new();
         loop {
             if let Some(item) = self.try_pop() {
                 return item;
-            }
-
-            if !backoff.is_completed() {
-                backoff.snooze();
-                continue;
             }
 
             let listener = self.push_event.listen();
             if let Some(item) = self.try_pop() {
                 return item;
             }
+
             listener.await;
         }
     }
 
+    #[inline(always)]
     pub fn try_find<F>(&self, find_fn: F) -> Option<C::Item>
     where
         F: FnMut(&C::Item) -> bool,
     {
         let item = self.container.find_pop(find_fn);
-        if item.is_some() {
-            self.pop_event.notify(1);
+        if item.is_some() && self.has_capacity {
+            self.pop_event.notify_additional(1);
         }
         item
     }
@@ -197,9 +206,15 @@ impl<C: Container> ZQueue<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
+        if let Some(item) = self.try_find(&mut find_fn) {
+            return item;
+        }
+
         let backoff = crossbeam_utils::Backoff::new();
+        self.find_waiters.fetch_add(1, Ordering::Release);
         loop {
             if let Some(item) = self.try_find(&mut find_fn) {
+                self.find_waiters.fetch_sub(1, Ordering::Relaxed);
                 return item;
             }
 
@@ -210,8 +225,10 @@ impl<C: Container> ZQueue<C> {
 
             let listener = self.push_event.listen();
             if let Some(item) = self.try_find(&mut find_fn) {
+                self.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
             }
+
             listener.wait();
         }
     }
@@ -220,21 +237,19 @@ impl<C: Container> ZQueue<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
-        let backoff = crossbeam_utils::Backoff::new();
+        self.find_waiters.fetch_add(1, Ordering::Release);
         loop {
             if let Some(item) = self.try_find(&mut find_fn) {
+                self.find_waiters.fetch_sub(1, Ordering::Relaxed);
                 return item;
-            }
-
-            if !backoff.is_completed() {
-                backoff.snooze();
-                continue;
             }
 
             let listener = self.push_event.listen();
             if let Some(item) = self.try_find(&mut find_fn) {
+                self.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
             }
+
             listener.await;
         }
     }
@@ -261,7 +276,9 @@ impl<C: Container> ZQueue<C> {
             self.container.retain(retain_fn)
         };
 
-        self.pop_event.notify(removed);
+        if self.has_capacity && removed > 0 {
+            self.pop_event.notify_additional(removed);
+        }
     }
 
     pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<C::Item>)
@@ -274,10 +291,11 @@ impl<C: Container> ZQueue<C> {
 
         let old_len = into.len();
         self.container.retain_into(retain_fn, into);
-        let new_len = into.len();
+        let removed = into.len() - old_len;
 
-        let removed = old_len - new_len;
-        self.pop_event.notify(removed);
+        if self.has_capacity && removed > 0 {
+            self.pop_event.notify_additional(removed);
+        }
     }
 
     pub fn visit<F>(&self, visit_fn: F)

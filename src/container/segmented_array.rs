@@ -44,7 +44,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     type Item = T;
 
     fn len(&self) -> usize {
-        self.len.load(Ordering::SeqCst)
+        self.len.load(Ordering::Acquire)
     }
 
     fn capacity(&self) -> Option<NonZeroUsize> {

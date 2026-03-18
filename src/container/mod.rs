@@ -32,10 +32,12 @@ pub trait Container {
 
     fn capacity(&self) -> Option<NonZeroUsize>;
 
+    #[inline(always)]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline(always)]
     fn is_full(&self) -> bool {
         self.capacity().is_some_and(|cap| self.len() >= cap.get())
     }

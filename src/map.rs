@@ -27,12 +27,11 @@ enum CreateContainer<C> {
 pub struct ZQueueMap<K, C, S = DefaultHashState> {
     key_index_map: RwLock<IndexMap<K, usize, S>>,
     next_key_index: AtomicUsize,
+    find_waiters: CachePadded<AtomicUsize>,
     queues: Vec<ZQueue<C>>,
     create_container: CreateContainer<C>,
     // Notified on push.
     push_event: CachePadded<Event>,
-    // All waiters are notified on every push.
-    find_waiter: CachePadded<Event>,
 }
 
 impl<K, C, S> ZQueueMap<K, C, S>
@@ -69,10 +68,10 @@ where
         Self {
             key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
             next_key_index: AtomicUsize::new(0),
+            find_waiters: CachePadded::new(AtomicUsize::new(0)),
             queues: Vec::with_capacity(key_capacity),
             create_container: CreateContainer::Bounded(queue_capacity, C::new_bounded),
             push_event: CachePadded::new(Event::new()),
-            find_waiter: CachePadded::new(Event::new()),
         }
     }
 
@@ -83,10 +82,10 @@ where
         Self {
             key_index_map: RwLock::new(IndexMap::with_capacity_and_hasher(key_capacity, hasher)),
             next_key_index: AtomicUsize::new(0),
+            find_waiters: CachePadded::new(AtomicUsize::new(0)),
             queues: Vec::with_capacity(key_capacity),
             create_container: CreateContainer::Unbounded(C::new_unbounded),
             push_event: CachePadded::new(Event::new()),
-            find_waiter: CachePadded::new(Event::new()),
         }
     }
 
@@ -140,8 +139,11 @@ where
             let queue = &self.queues[index];
             let result = queue.try_push(item);
             if result.is_ok() {
-                self.push_event.notify(1);
-                self.find_waiter.notify(usize::MAX);
+                if self.find_waiters.load(Ordering::Relaxed) != 0 {
+                    self.push_event.notify(usize::MAX);
+                } else {
+                    self.push_event.notify_additional(1);
+                }
             }
             return result;
         }
@@ -152,8 +154,11 @@ where
             let queue = &self.queues[index];
             let result = queue.try_push(item);
             if result.is_ok() {
-                self.push_event.notify(1);
-                self.find_waiter.notify(usize::MAX);
+                if self.find_waiters.load(Ordering::Relaxed) != 0 {
+                    self.push_event.notify(usize::MAX);
+                } else {
+                    self.push_event.notify_additional(1);
+                }
             }
             return result;
         }
@@ -163,8 +168,8 @@ where
         let index = self.queues.push(queue);
         lock.insert(key.clone(), index);
         drop(lock);
-        self.push_event.notify(1);
-        self.find_waiter.notify(usize::MAX);
+        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+        self.push_event.notify_additional(find_waiters + 1);
         Ok(())
     }
 
@@ -172,8 +177,8 @@ where
         if let Some(&index) = self.key_index_map.read().get(key) {
             let queue = &self.queues[index];
             queue.push(item);
-            self.push_event.notify(1);
-            self.find_waiter.notify(usize::MAX);
+            let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+            self.push_event.notify_additional(find_waiters + 1);
             return;
         }
 
@@ -182,8 +187,8 @@ where
             drop(lock);
             let queue = &self.queues[index];
             queue.push(item);
-            self.push_event.notify(1);
-            self.find_waiter.notify(usize::MAX);
+            let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+            self.push_event.notify_additional(find_waiters + 1);
             return;
         }
 
@@ -192,8 +197,8 @@ where
         let index = self.queues.push(queue);
         lock.insert(key.clone(), index);
         drop(lock);
-        self.push_event.notify(1);
-        self.find_waiter.notify(usize::MAX);
+        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+        self.push_event.notify_additional(find_waiters + 1);
     }
 
     #[expect(clippy::await_holding_lock, reason = "False positive, lock is dropped before await")]
@@ -206,8 +211,11 @@ where
 
                 match queue.try_push(item) {
                     Ok(()) => {
-                        self.push_event.notify(1);
-                        self.find_waiter.notify(usize::MAX);
+                        if self.find_waiters.load(Ordering::Relaxed) != 0 {
+                            self.push_event.notify(usize::MAX);
+                        } else {
+                            self.push_event.notify_additional(1);
+                        }
                         return;
                     }
                     Err(v) => item = v,
@@ -227,8 +235,11 @@ where
 
                 match queue.try_push(item) {
                     Ok(()) => {
-                        self.push_event.notify(1);
-                        self.find_waiter.notify(usize::MAX);
+                        if self.find_waiters.load(Ordering::Relaxed) != 0 {
+                            self.push_event.notify(usize::MAX);
+                        } else {
+                            self.push_event.notify_additional(1);
+                        }
                         return;
                     }
                     Err(v) => item = v,
@@ -243,8 +254,8 @@ where
         let index = self.queues.push(queue);
         lock.insert(key.clone(), index);
         drop(lock);
-        self.push_event.notify(1);
-        self.find_waiter.notify(usize::MAX);
+        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+        self.push_event.notify_additional(find_waiters + 1);
     }
 
     pub fn try_pop<KF>(&self, mut key_fn: KF) -> Option<(K, C::Item)>
@@ -369,8 +380,9 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
+        self.find_waiters.fetch_add(1, Ordering::Release);
         loop {
-            let listener = self.find_waiter.listen();
+            let listener = self.push_event.listen();
 
             {
                 let lock = self.key_index_map.read();
@@ -389,6 +401,7 @@ where
                     if key_fn(key)
                         && let Some(item) = self.queues[*index].try_find(&mut find_fn)
                     {
+                        self.find_waiters.fetch_sub(1, Ordering::Release);
                         return (key.clone(), item);
                     }
                 }
@@ -404,8 +417,9 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
+        self.find_waiters.fetch_add(1, Ordering::Release);
         loop {
-            let listener = self.find_waiter.listen();
+            let listener = self.push_event.listen();
 
             {
                 let lock = self.key_index_map.read();
@@ -424,6 +438,7 @@ where
                     if key_fn(key)
                         && let Some(item) = self.queues[*index].try_find(&mut find_fn)
                     {
+                        self.find_waiters.fetch_sub(1, Ordering::Release);
                         return (key.clone(), item);
                     }
                 }
