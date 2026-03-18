@@ -18,7 +18,8 @@ pub struct SegmentedArray<T, const SEGMENT_SIZE: usize> {
 
 impl<T, const SEGMENT_SIZE: usize> CreateBounded for SegmentedArray<T, SEGMENT_SIZE> {
     fn new_bounded(capacity: NonZeroUsize) -> Self {
-        let mut queue = VecDeque::new();
+        let block_capacity = capacity.get().div_ceil(SEGMENT_SIZE);
+        let mut queue = VecDeque::with_capacity(block_capacity);
         queue.push_back(ArrayVec::new());
         Self {
             queue: CachePadded::new(Mutex::new(queue)),
