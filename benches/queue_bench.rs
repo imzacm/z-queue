@@ -453,7 +453,8 @@ fn bench_unbounded_async(c: &mut Criterion) {
     }
     {
         let mut group = c.benchmark_group("Unbounded Async MPMC");
-        bench_async_mpmc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        // Flume never gets past the warmup.
+        // bench_async_mpmc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         bench_zq_async_mpmc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
@@ -549,7 +550,8 @@ fn bench_bounded_async(c: &mut Criterion) {
     }
     {
         let mut group = c.benchmark_group("Bounded Async MPMC");
-        bench_async_mpmc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        // Flume never gets past the warmup.
+        // bench_async_mpmc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         bench_zq_async_mpmc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
