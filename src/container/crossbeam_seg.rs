@@ -3,16 +3,17 @@ use core::num::NonZeroUsize;
 
 use crossbeam_queue::SegQueue;
 
-use crate::container::{Container, CreateUnbounded};
+use crate::container::{Container, ContainerState, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct CrossbeamSegQueue<T> {
     queue: SegQueue<T>,
+    state: ContainerState,
 }
 
 impl<T> CreateUnbounded for CrossbeamSegQueue<T> {
     fn new_unbounded() -> Self {
-        Self { queue: SegQueue::new() }
+        Self { queue: SegQueue::new(), state: ContainerState::default() }
     }
 }
 
@@ -36,11 +37,13 @@ impl<T> Container for CrossbeamSegQueue<T> {
     }
 
     fn push(&self, item: T) -> Result<(), T> {
+        let _guard = self.state.push();
         self.queue.push(item);
         Ok(())
     }
 
     fn pop(&self) -> Option<T> {
+        let _guard = self.state.pop();
         self.queue.pop()
     }
 
@@ -48,6 +51,8 @@ impl<T> Container for CrossbeamSegQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let _guard = self.state.suspend();
+
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
             if find_fn(&item) {
@@ -62,6 +67,8 @@ impl<T> Container for CrossbeamSegQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let _guard = self.state.suspend();
+
         let mut removed = 0;
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
@@ -78,6 +85,8 @@ impl<T> Container for CrossbeamSegQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let _guard = self.state.suspend();
+
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
             if retain_fn(&item) {
@@ -92,6 +101,8 @@ impl<T> Container for CrossbeamSegQueue<T> {
     where
         F: FnMut(&Self::Item),
     {
+        let _guard = self.state.suspend();
+
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
             visit_fn(&item);
@@ -102,6 +113,8 @@ impl<T> Container for CrossbeamSegQueue<T> {
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;
+
+        let _guard = self.state.suspend();
 
         let mut items = Vec::with_capacity(self.queue.len());
         while let Some(item) = self.queue.pop() {
@@ -115,6 +128,8 @@ impl<T> Container for CrossbeamSegQueue<T> {
 
     #[cfg(feature = "fastrand")]
     fn fastrand_shuffle(&self) {
+        let _guard = self.state.suspend();
+
         let mut items = Vec::with_capacity(self.queue.len());
         while let Some(item) = self.queue.pop() {
             items.push(item);

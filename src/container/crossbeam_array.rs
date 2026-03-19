@@ -3,16 +3,20 @@ use core::num::NonZeroUsize;
 
 use crossbeam_queue::ArrayQueue;
 
-use crate::container::{Container, CreateBounded};
+use crate::container::{Container, ContainerState, CreateBounded};
 
 #[derive(Debug)]
 pub struct CrossbeamArrayQueue<T> {
     queue: ArrayQueue<T>,
+    state: ContainerState,
 }
 
 impl<T> CreateBounded for CrossbeamArrayQueue<T> {
     fn new_bounded(capacity: NonZeroUsize) -> Self {
-        Self { queue: ArrayQueue::new(capacity.get()) }
+        Self {
+            queue: ArrayQueue::new(capacity.get()),
+            state: ContainerState::default(),
+        }
     }
 }
 
@@ -37,10 +41,12 @@ impl<T> Container for CrossbeamArrayQueue<T> {
     }
 
     fn push(&self, item: T) -> Result<(), T> {
+        let _guard = self.state.push();
         self.queue.push(item)
     }
 
     fn pop(&self) -> Option<T> {
+        let _guard = self.state.pop();
         self.queue.pop()
     }
 
@@ -48,6 +54,8 @@ impl<T> Container for CrossbeamArrayQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let _guard = self.state.suspend();
+
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
             if find_fn(&item) {
@@ -64,6 +72,8 @@ impl<T> Container for CrossbeamArrayQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let _guard = self.state.suspend();
+
         let mut removed = 0;
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
@@ -82,6 +92,8 @@ impl<T> Container for CrossbeamArrayQueue<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        let _guard = self.state.suspend();
+
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
             if retain_fn(&item) {
@@ -98,6 +110,8 @@ impl<T> Container for CrossbeamArrayQueue<T> {
     where
         F: FnMut(&Self::Item),
     {
+        let _guard = self.state.suspend();
+
         for _ in 0..self.queue.len() {
             let Some(item) = self.queue.pop() else { break };
             visit_fn(&item);
@@ -110,6 +124,8 @@ impl<T> Container for CrossbeamArrayQueue<T> {
     #[cfg(feature = "rand")]
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;
+
+        let _guard = self.state.suspend();
 
         let mut items = Vec::with_capacity(self.queue.len());
         while let Some(item) = self.queue.pop() {
@@ -125,6 +141,8 @@ impl<T> Container for CrossbeamArrayQueue<T> {
 
     #[cfg(feature = "fastrand")]
     fn fastrand_shuffle(&self) {
+        let _guard = self.state.suspend();
+
         let mut items = Vec::with_capacity(self.queue.len());
         while let Some(item) = self.queue.pop() {
             items.push(item);

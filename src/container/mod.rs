@@ -8,6 +8,9 @@ mod wal;
 
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use crossbeam_utils::CachePadded;
 
 pub use self::crossbeam_array::CrossbeamArrayQueue;
 pub use self::crossbeam_seg::CrossbeamSegQueue;
@@ -70,4 +73,85 @@ pub trait Container {
 
     #[cfg(feature = "fastrand")]
     fn fastrand_shuffle(&self);
+}
+
+#[derive(Default, Debug)]
+struct ContainerState {
+    active_pushes: CachePadded<AtomicUsize>,
+    active_pops: CachePadded<AtomicUsize>,
+    suspend: CachePadded<AtomicBool>,
+}
+
+impl ContainerState {
+    fn push_pop<'v>(value: &'v AtomicUsize, suspend: &AtomicBool) -> ContainerStateGuard<'v> {
+        loop {
+            value.fetch_add(1, Ordering::SeqCst);
+
+            if !suspend.load(Ordering::SeqCst) {
+                return ContainerStateGuard { value };
+            }
+
+            value.fetch_sub(1, Ordering::SeqCst);
+
+            let backoff = crossbeam_utils::Backoff::new();
+            while suspend.load(Ordering::Relaxed) {
+                backoff.snooze();
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn push(&self) -> ContainerStateGuard<'_> {
+        Self::push_pop(&self.active_pushes, &self.suspend)
+    }
+
+    #[inline(always)]
+    fn pop(&self) -> ContainerStateGuard<'_> {
+        Self::push_pop(&self.active_pops, &self.suspend)
+    }
+
+    #[inline(always)]
+    fn suspend(&self) -> ContainerSuspendGuard<'_> {
+        let backoff = crossbeam_utils::Backoff::new();
+
+        while self
+            .suspend
+            .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            backoff.snooze();
+        }
+
+        let backoff = crossbeam_utils::Backoff::new();
+
+        while self.active_pushes.load(Ordering::SeqCst) > 0
+            || self.active_pops.load(Ordering::SeqCst) > 0
+        {
+            backoff.snooze();
+        }
+
+        ContainerSuspendGuard { value: &self.suspend }
+    }
+}
+
+#[derive(Debug)]
+struct ContainerStateGuard<'a> {
+    value: &'a AtomicUsize,
+}
+
+impl Drop for ContainerStateGuard<'_> {
+    fn drop(&mut self) {
+        self.value.fetch_sub(1, Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+struct ContainerSuspendGuard<'a> {
+    value: &'a AtomicBool,
+}
+
+impl Drop for ContainerSuspendGuard<'_> {
+    fn drop(&mut self) {
+        self.value.store(false, Ordering::Release);
+    }
 }
