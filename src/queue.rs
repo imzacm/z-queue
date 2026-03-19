@@ -108,8 +108,8 @@ impl<C: Container> ZQueue<C> {
                 backoff.snooze();
                 continue;
             }
-
-            let listener = self.pop_event.listen();
+            
+            event_listener::listener!(self.pop_event => listener);
             match self.try_push(item) {
                 Ok(()) => return,
                 Err(v) => item = v,
@@ -132,7 +132,7 @@ impl<C: Container> ZQueue<C> {
                 Err(v) => item = v,
             }
 
-            let listener = self.pop_event.listen();
+            event_listener::listener!(self.pop_event => listener);
             match self.try_push(item) {
                 Ok(()) => return,
                 Err(v) => item = v,
@@ -166,8 +166,8 @@ impl<C: Container> ZQueue<C> {
                 backoff.snooze();
                 continue;
             }
-
-            let listener = self.push_event.listen();
+            
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_pop() {
                 return item;
             }
@@ -181,7 +181,7 @@ impl<C: Container> ZQueue<C> {
                 return item;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_pop() {
                 return item;
             }
@@ -223,7 +223,7 @@ impl<C: Container> ZQueue<C> {
                 continue;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_find(&mut find_fn) {
                 self.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
@@ -244,7 +244,7 @@ impl<C: Container> ZQueue<C> {
                 return item;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_find(&mut find_fn) {
                 self.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;

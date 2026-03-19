@@ -260,7 +260,7 @@ where
                 continue;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_pop(&mut key_fn) {
                 return item;
             }
@@ -278,7 +278,7 @@ where
                 return item;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_pop_async(&mut key_fn).await {
                 return item;
             }
@@ -356,7 +356,7 @@ where
                 continue;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_find(&mut key_fn, &mut find_fn) {
                 return item;
             }
@@ -378,7 +378,7 @@ where
                 return item;
             }
 
-            let listener = self.push_event.listen();
+            event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_find_async(&mut key_fn, &mut find_fn).await {
                 return item;
             }
