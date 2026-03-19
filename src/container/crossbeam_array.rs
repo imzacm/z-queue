@@ -3,7 +3,8 @@ use core::num::NonZeroUsize;
 
 use crossbeam_queue::ArrayQueue;
 
-use crate::container::{Container, ContainerState, CreateBounded};
+use crate::container::state::ContainerState;
+use crate::container::{Container, CreateBounded};
 
 #[derive(Debug)]
 pub struct CrossbeamArrayQueue<T> {

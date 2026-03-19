@@ -1,24 +1,23 @@
+#[cfg(feature = "crossbeam-queue")]
 mod crossbeam_array;
+#[cfg(feature = "crossbeam-queue")]
 mod crossbeam_seg;
+#[cfg(feature = "segmented-array")]
 mod segmented_array;
 mod swap;
 mod vec_deque;
-#[cfg(feature = "wal")]
-mod wal;
 
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use crossbeam_utils::CachePadded;
-
+#[cfg(feature = "crossbeam-queue")]
 pub use self::crossbeam_array::CrossbeamArrayQueue;
+#[cfg(feature = "crossbeam-queue")]
 pub use self::crossbeam_seg::CrossbeamSegQueue;
+#[cfg(feature = "segmented-array")]
 pub use self::segmented_array::SegmentedArray;
 pub use self::swap::Swap;
 pub use self::vec_deque::VecDeque;
-#[cfg(feature = "wal")]
-pub use self::wal::Wal;
 
 pub trait CreateBounded: Container + Sized {
     fn new_bounded(capacity: NonZeroUsize) -> Self;
@@ -75,83 +74,91 @@ pub trait Container {
     fn fastrand_shuffle(&self);
 }
 
-#[derive(Default, Debug)]
-struct ContainerState {
-    active_pushes: CachePadded<AtomicUsize>,
-    active_pops: CachePadded<AtomicUsize>,
-    suspend: CachePadded<AtomicBool>,
-}
+#[cfg(feature = "crossbeam-queue")]
+mod state {
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-impl ContainerState {
-    fn push_pop<'v>(value: &'v AtomicUsize, suspend: &AtomicBool) -> ContainerStateGuard<'v> {
-        loop {
-            value.fetch_add(1, Ordering::SeqCst);
+    use crossbeam_utils::CachePadded;
 
-            if !suspend.load(Ordering::SeqCst) {
-                return ContainerStateGuard { value };
+    #[derive(Default, Debug)]
+    pub struct ContainerState {
+        active_pushes: CachePadded<AtomicUsize>,
+        active_pops: CachePadded<AtomicUsize>,
+        suspend: CachePadded<AtomicBool>,
+    }
+
+    impl ContainerState {
+        pub fn push_pop<'v>(
+            value: &'v AtomicUsize,
+            suspend: &AtomicBool,
+        ) -> ContainerStateGuard<'v> {
+            loop {
+                value.fetch_add(1, Ordering::SeqCst);
+
+                if !suspend.load(Ordering::SeqCst) {
+                    return ContainerStateGuard { value };
+                }
+
+                value.fetch_sub(1, Ordering::SeqCst);
+
+                let backoff = crossbeam_utils::Backoff::new();
+                while suspend.load(Ordering::Relaxed) {
+                    backoff.snooze();
+                }
             }
+        }
 
-            value.fetch_sub(1, Ordering::SeqCst);
+        pub fn push(&self) -> ContainerStateGuard<'_> {
+            Self::push_pop(&self.active_pushes, &self.suspend)
+        }
 
+        pub fn pop(&self) -> ContainerStateGuard<'_> {
+            Self::push_pop(&self.active_pops, &self.suspend)
+        }
+
+        #[inline(always)]
+        pub fn suspend(&self) -> ContainerSuspendGuard<'_> {
             let backoff = crossbeam_utils::Backoff::new();
-            while suspend.load(Ordering::Relaxed) {
+
+            while self
+                .suspend
+                .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
+                .is_err()
+            {
                 backoff.snooze();
             }
+
+            let backoff = crossbeam_utils::Backoff::new();
+
+            while self.active_pushes.load(Ordering::SeqCst) > 0
+                || self.active_pops.load(Ordering::SeqCst) > 0
+            {
+                backoff.snooze();
+            }
+
+            ContainerSuspendGuard { value: &self.suspend }
         }
     }
 
-    #[inline(always)]
-    fn push(&self) -> ContainerStateGuard<'_> {
-        Self::push_pop(&self.active_pushes, &self.suspend)
+    #[derive(Debug)]
+    pub struct ContainerStateGuard<'a> {
+        value: &'a AtomicUsize,
     }
 
-    #[inline(always)]
-    fn pop(&self) -> ContainerStateGuard<'_> {
-        Self::push_pop(&self.active_pops, &self.suspend)
-    }
-
-    #[inline(always)]
-    fn suspend(&self) -> ContainerSuspendGuard<'_> {
-        let backoff = crossbeam_utils::Backoff::new();
-
-        while self
-            .suspend
-            .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_err()
-        {
-            backoff.snooze();
+    impl Drop for ContainerStateGuard<'_> {
+        fn drop(&mut self) {
+            self.value.fetch_sub(1, Ordering::Release);
         }
+    }
 
-        let backoff = crossbeam_utils::Backoff::new();
+    #[derive(Debug)]
+    pub struct ContainerSuspendGuard<'a> {
+        value: &'a AtomicBool,
+    }
 
-        while self.active_pushes.load(Ordering::SeqCst) > 0
-            || self.active_pops.load(Ordering::SeqCst) > 0
-        {
-            backoff.snooze();
+    impl Drop for ContainerSuspendGuard<'_> {
+        fn drop(&mut self) {
+            self.value.store(false, Ordering::Release);
         }
-
-        ContainerSuspendGuard { value: &self.suspend }
-    }
-}
-
-#[derive(Debug)]
-struct ContainerStateGuard<'a> {
-    value: &'a AtomicUsize,
-}
-
-impl Drop for ContainerStateGuard<'_> {
-    fn drop(&mut self) {
-        self.value.fetch_sub(1, Ordering::Release);
-    }
-}
-
-#[derive(Debug)]
-struct ContainerSuspendGuard<'a> {
-    value: &'a AtomicBool,
-}
-
-impl Drop for ContainerSuspendGuard<'_> {
-    fn drop(&mut self) {
-        self.value.store(false, Ordering::Release);
     }
 }

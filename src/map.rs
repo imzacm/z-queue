@@ -1,8 +1,10 @@
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::hash::{BuildHasher, Hash};
 use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crossbeam_queue::SegQueue;
+use arc_swap::ArcSwap;
 use crossbeam_utils::CachePadded;
 use event_listener::{Event, Listener};
 
@@ -23,7 +25,7 @@ enum CreateContainer<C> {
 
 pub struct ZQueueMap<K, C, S: BuildHasher = DefaultHashState> {
     queues: scc::HashMap<K, ZQueue<C>, S>,
-    ready_keys: SegQueue<K>,
+    keys: ArcSwap<Vec<K>>,
     find_waiters: CachePadded<AtomicUsize>,
     create_container: CreateContainer<C>,
     // Notified on push.
@@ -63,7 +65,7 @@ where
     {
         Self {
             queues: scc::HashMap::with_capacity_and_hasher(key_capacity, hasher),
-            ready_keys: SegQueue::new(),
+            keys: ArcSwap::new(Arc::new(Vec::with_capacity(key_capacity))),
             find_waiters: CachePadded::new(AtomicUsize::new(0)),
             create_container: CreateContainer::Bounded(queue_capacity, C::new_bounded),
             push_event: CachePadded::new(Event::new()),
@@ -75,8 +77,8 @@ where
         C: CreateUnbounded,
     {
         Self {
-            queues: scc::HashMap::with_hasher(hasher),
-            ready_keys: SegQueue::new(),
+            queues: scc::HashMap::with_capacity_and_hasher(key_capacity, hasher),
+            keys: ArcSwap::new(Arc::new(Vec::with_capacity(key_capacity))),
             find_waiters: CachePadded::new(AtomicUsize::new(0)),
             create_container: CreateContainer::Unbounded(C::new_unbounded),
             push_event: CachePadded::new(Event::new()),
@@ -88,6 +90,55 @@ where
             CreateContainer::Unbounded(f) => ZQueue::new(f()),
             CreateContainer::Bounded(cap, f) => ZQueue::new(f(*cap)),
         }
+    }
+
+    fn push_key(&self, key: &K) {
+        self.keys.rcu(|keys| {
+            let mut keys = Vec::clone(keys);
+            keys.push(key.clone());
+            keys
+        });
+    }
+
+    fn rotate_keys(&self) {
+        self.keys.rcu(|keys| {
+            let mut keys = Vec::clone(keys);
+            if !keys.is_empty() {
+                keys.rotate_left(1);
+            }
+            keys
+        });
+    }
+
+    fn ensure_queue_sync(&self, key: &K) -> scc::hash_map::OccupiedEntry<'_, K, ZQueue<C>, S> {
+        let mut is_new = false;
+        let queue = self.queues.entry_sync(key.clone()).or_insert_with(|| {
+            is_new = true;
+            self.create_queue()
+        });
+
+        if is_new {
+            self.push_key(key);
+        }
+
+        queue
+    }
+
+    async fn ensure_queue_async(
+        &self,
+        key: &K,
+    ) -> scc::hash_map::OccupiedEntry<'_, K, ZQueue<C>, S> {
+        let mut is_new = false;
+        let queue = self.queues.entry_async(key.clone()).await.or_insert_with(|| {
+            is_new = true;
+            self.create_queue()
+        });
+
+        if is_new {
+            self.push_key(key);
+        }
+
+        queue
     }
 
     pub fn total_len(&self) -> usize {
@@ -127,32 +178,25 @@ where
     }
 
     pub fn try_push(&self, key: K, item: C::Item) -> Result<(), C::Item> {
-        let queue = self.queues.entry_sync(key.clone()).or_insert_with(|| self.create_queue());
+        let queue = self.ensure_queue_sync(&key);
 
         queue.try_push(item)?;
 
-        self.ready_keys.push(key);
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify_additional(find_waiters + 1);
         Ok(())
     }
 
     pub fn push(&self, key: K, item: C::Item) {
-        let queue = self.queues.entry_sync(key.clone()).or_insert_with(|| self.create_queue());
+        let queue = self.ensure_queue_sync(&key);
         queue.push(item);
-        self.ready_keys.push(key);
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify_additional(find_waiters + 1);
     }
 
     pub async fn push_async(&self, key: K, item: C::Item) {
-        let queue = self
-            .queues
-            .entry_async(key.clone())
-            .await
-            .or_insert_with(|| self.create_queue());
+        let queue = self.ensure_queue_async(&key).await;
         queue.push_async(item).await;
-        self.ready_keys.push(key);
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify_additional(find_waiters + 1);
     }
@@ -161,18 +205,39 @@ where
     where
         KF: FnMut(&K) -> bool,
     {
-        for _ in 0..self.ready_keys.len() {
-            let Some(key) = self.ready_keys.pop() else { break };
-            if !key_fn(&key) {
-                self.ready_keys.push(key);
+        let keys = self.keys.load();
+        for key in keys.iter() {
+            if !key_fn(key) {
                 continue;
             }
 
-            let Some(queue) = self.queues.get_sync(&key) else { continue };
+            let Some(queue) = self.queues.get_sync(key) else { continue };
             if let Some(item) = queue.try_pop() {
-                return Some((key, item));
+                self.rotate_keys();
+                return Some((key.clone(), item));
             }
         }
+
+        None
+    }
+
+    pub async fn try_pop_async<KF>(&self, mut key_fn: KF) -> Option<(K, C::Item)>
+    where
+        KF: FnMut(&K) -> bool,
+    {
+        let keys = self.keys.load();
+        for key in keys.iter() {
+            if !key_fn(key) {
+                continue;
+            }
+
+            let Some(queue) = self.queues.get_async(key).await else { continue };
+            if let Some(item) = queue.try_pop() {
+                self.rotate_keys();
+                return Some((key.clone(), item));
+            }
+        }
+
         None
     }
 
@@ -180,33 +245,24 @@ where
     where
         KF: FnMut(&K) -> bool,
     {
-        loop {
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
+        if let Some(item) = self.try_pop(&mut key_fn) {
+            return item;
+        }
 
-                let Some(queue) = self.queues.get_sync(&key) else { continue };
-                if let Some(item) = queue.try_pop() {
-                    return (key, item);
-                }
+        let backoff = crossbeam_utils::Backoff::new();
+        loop {
+            if let Some(item) = self.try_pop(&mut key_fn) {
+                return item;
+            }
+
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
             }
 
             let listener = self.push_event.listen();
-
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
-
-                let Some(queue) = self.queues.get_sync(&key) else { continue };
-                if let Some(item) = queue.try_pop() {
-                    return (key, item);
-                }
+            if let Some(item) = self.try_pop(&mut key_fn) {
+                return item;
             }
 
             listener.wait();
@@ -218,32 +274,13 @@ where
         KF: FnMut(&K) -> bool,
     {
         loop {
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
-
-                let Some(queue) = self.queues.get_async(&key).await else { continue };
-                if let Some(item) = queue.try_pop() {
-                    return (key, item);
-                }
+            if let Some(item) = self.try_pop_async(&mut key_fn).await {
+                return item;
             }
 
             let listener = self.push_event.listen();
-
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
-
-                let Some(queue) = self.queues.get_async(&key).await else { continue };
-                if let Some(item) = queue.try_pop() {
-                    return (key, item);
-                }
+            if let Some(item) = self.try_pop_async(&mut key_fn).await {
+                return item;
             }
 
             listener.await;
@@ -255,16 +292,41 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
-        for _ in 0..self.ready_keys.len() {
-            let Some(key) = self.ready_keys.pop() else { break };
-            if !key_fn(&key) {
-                self.ready_keys.push(key);
+        let keys = self.keys.load();
+        for key in keys.iter() {
+            if !key_fn(key) {
                 continue;
             }
 
-            let Some(queue) = self.queues.get_sync(&key) else { continue };
+            let Some(queue) = self.queues.get_sync(key) else { continue };
             if let Some(item) = queue.try_find(&mut find_fn) {
-                return Some((key, item));
+                self.rotate_keys();
+                return Some((key.clone(), item));
+            }
+        }
+
+        None
+    }
+
+    pub async fn try_find_async<KF, F>(
+        &self,
+        mut key_fn: KF,
+        mut find_fn: F,
+    ) -> Option<(K, C::Item)>
+    where
+        KF: FnMut(&K) -> bool,
+        F: FnMut(&C::Item) -> bool,
+    {
+        let keys = self.keys.load();
+        for key in keys.iter() {
+            if !key_fn(key) {
+                continue;
+            }
+
+            let Some(queue) = self.queues.get_async(key).await else { continue };
+            if let Some(item) = queue.try_find(&mut find_fn) {
+                self.rotate_keys();
+                return Some((key.clone(), item));
             }
         }
 
@@ -277,35 +339,26 @@ where
         F: FnMut(&C::Item) -> bool,
     {
         self.find_waiters.fetch_add(1, Ordering::Release);
-        loop {
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
+        let _guard = FindWaiterGuard { count: &self.find_waiters };
 
-                let Some(queue) = self.queues.get_sync(&key) else { continue };
-                if let Some(item) = queue.try_find(&mut find_fn) {
-                    self.find_waiters.fetch_sub(1, Ordering::Release);
-                    return (key, item);
-                }
+        if let Some(item) = self.try_find(&mut key_fn, &mut find_fn) {
+            return item;
+        }
+
+        let backoff = crossbeam_utils::Backoff::new();
+        loop {
+            if let Some(item) = self.try_find(&mut key_fn, &mut find_fn) {
+                return item;
+            }
+
+            if !backoff.is_completed() {
+                backoff.snooze();
+                continue;
             }
 
             let listener = self.push_event.listen();
-
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
-
-                let Some(queue) = self.queues.get_sync(&key) else { continue };
-                if let Some(item) = queue.try_find(&mut find_fn) {
-                    self.find_waiters.fetch_sub(1, Ordering::Release);
-                    return (key, item);
-                }
+            if let Some(item) = self.try_find(&mut key_fn, &mut find_fn) {
+                return item;
             }
 
             listener.wait();
@@ -318,35 +371,16 @@ where
         F: FnMut(&C::Item) -> bool,
     {
         self.find_waiters.fetch_add(1, Ordering::Release);
-        loop {
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
+        let _guard = FindWaiterGuard { count: &self.find_waiters };
 
-                let Some(queue) = self.queues.get_async(&key).await else { continue };
-                if let Some(item) = queue.try_find(&mut find_fn) {
-                    self.find_waiters.fetch_sub(1, Ordering::Release);
-                    return (key, item);
-                }
+        loop {
+            if let Some(item) = self.try_find_async(&mut key_fn, &mut find_fn).await {
+                return item;
             }
 
             let listener = self.push_event.listen();
-
-            for _ in 0..self.ready_keys.len() {
-                let Some(key) = self.ready_keys.pop() else { break };
-                if !key_fn(&key) {
-                    self.ready_keys.push(key);
-                    continue;
-                }
-
-                let Some(queue) = self.queues.get_async(&key).await else { continue };
-                if let Some(item) = queue.try_find(&mut find_fn) {
-                    self.find_waiters.fetch_sub(1, Ordering::Release);
-                    return (key, item);
-                }
+            if let Some(item) = self.try_find_async(&mut key_fn, &mut find_fn).await {
+                return item;
             }
 
             listener.await;
@@ -366,12 +400,23 @@ where
         });
     }
 
-    pub fn retain_into<KF, F>(
-        &self,
-        mut key_fn: KF,
-        mut retain_fn: F,
-        into: &mut alloc::vec::Vec<C::Item>,
-    ) where
+    pub async fn retain_async<KF, F>(&self, mut key_fn: KF, mut retain_fn: F)
+    where
+        KF: FnMut(&K) -> bool,
+        F: FnMut(&C::Item) -> bool,
+    {
+        self.queues
+            .iter_async(|key, queue| {
+                if key_fn(key) {
+                    queue.retain(&mut retain_fn);
+                }
+                true
+            })
+            .await;
+    }
+
+    pub fn retain_into<KF, F>(&self, mut key_fn: KF, mut retain_fn: F, into: &mut Vec<C::Item>)
+    where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
@@ -383,6 +428,25 @@ where
         });
     }
 
+    pub async fn retain_into_async<KF, F>(
+        &self,
+        mut key_fn: KF,
+        mut retain_fn: F,
+        into: &mut Vec<C::Item>,
+    ) where
+        KF: FnMut(&K) -> bool,
+        F: FnMut(&C::Item) -> bool,
+    {
+        self.queues
+            .iter_async(|key, queue| {
+                if key_fn(key) {
+                    queue.retain_into(&mut retain_fn, into);
+                }
+                true
+            })
+            .await;
+    }
+
     pub fn visit<F>(&self, mut visit_fn: F)
     where
         F: FnMut(&K, &C::Item),
@@ -391,6 +455,18 @@ where
             queue.visit(|item| visit_fn(key, item));
             true
         });
+    }
+
+    pub async fn visit_async<F>(&self, mut visit_fn: F)
+    where
+        F: FnMut(&K, &C::Item),
+    {
+        self.queues
+            .iter_async(|key, queue| {
+                queue.visit(|item| visit_fn(key, item));
+                true
+            })
+            .await;
     }
 
     #[cfg(feature = "rand")]
@@ -407,5 +483,15 @@ where
             queue.fastrand_shuffle();
             true
         });
+    }
+}
+
+struct FindWaiterGuard<'a> {
+    count: &'a AtomicUsize,
+}
+
+impl Drop for FindWaiterGuard<'_> {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::Release);
     }
 }

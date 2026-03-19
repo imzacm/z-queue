@@ -3,7 +3,8 @@ use core::num::NonZeroUsize;
 
 use crossbeam_queue::SegQueue;
 
-use crate::container::{Container, ContainerState, CreateUnbounded};
+use crate::container::state::ContainerState;
+use crate::container::{Container, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct CrossbeamSegQueue<T> {
