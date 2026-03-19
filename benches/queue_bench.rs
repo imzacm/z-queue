@@ -5,7 +5,11 @@ use std::thread;
 use criterion::{Criterion, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 use z_queue::ZQueue;
-use z_queue::container::{CrossbeamArrayQueue, CrossbeamSegQueue, SegmentedArray, Swap, VecDeque};
+#[cfg(feature = "segmented-array")]
+use z_queue::container::SegmentedArray;
+#[cfg(feature = "crossbeam-queue")]
+use z_queue::container::{CrossbeamArrayQueue, CrossbeamSegQueue};
+use z_queue::container::{Swap, VecDeque};
 
 const MESSAGES: usize = 1000;
 const BOUND: usize = 100;
@@ -234,11 +238,13 @@ fn bench_unbounded_sync(c: &mut Criterion) {
         bench_sync_spsc!(&mut group, "std::sync::mpsc", std::sync::mpsc::channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "crossbeam_channel", crossbeam_channel::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "flume", flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_spsc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
             ZQueue::<CrossbeamSegQueue<_>>::unbounded()
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_sync_spsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -257,11 +263,13 @@ fn bench_unbounded_sync(c: &mut Criterion) {
         bench_sync_mpsc!(&mut group, "std::sync::mpsc", std::sync::mpsc::channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "crossbeam_channel", crossbeam_channel::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "flume", flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpsc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
             ZQueue::<CrossbeamSegQueue<_>>::unbounded()
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_sync_mpsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -280,11 +288,13 @@ fn bench_unbounded_sync(c: &mut Criterion) {
         // std::sync::mpsc omitted (SPSC/MPSC only)
         bench_sync_mpmc!(&mut group, "crossbeam_channel", crossbeam_channel::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpmc!(&mut group, "flume", flume::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpmc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
             ZQueue::<CrossbeamSegQueue<_>>::unbounded()
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_sync_mpmc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -309,11 +319,13 @@ fn bench_bounded_sync(c: &mut Criterion) {
         bench_sync_spsc!(&mut group, "std::sync::mpsc::sync_channel", std::sync::mpsc::sync_channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "crossbeam_channel", crossbeam_channel::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "flume", flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_spsc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
             ZQueue::<CrossbeamArrayQueue<_>>::bounded(BOUND_NON_ZERO)
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_sync_spsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -336,11 +348,13 @@ fn bench_bounded_sync(c: &mut Criterion) {
         bench_sync_mpsc!(&mut group, "std::sync::mpsc::sync_channel", std::sync::mpsc::sync_channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "crossbeam_channel", crossbeam_channel::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "flume", flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpsc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
             ZQueue::<CrossbeamArrayQueue<_>>::bounded(BOUND_NON_ZERO)
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_sync_mpsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -362,11 +376,13 @@ fn bench_bounded_sync(c: &mut Criterion) {
         let mut group = c.benchmark_group("Bounded Sync MPMC");
         bench_sync_mpmc!(&mut group, "crossbeam_channel", crossbeam_channel::bounded(BOUND), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpmc!(&mut group, "flume", flume::bounded(BOUND), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpmc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
             ZQueue::<CrossbeamArrayQueue<_>>::bounded(BOUND_NON_ZERO)
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_sync_mpmc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -395,12 +411,14 @@ fn bench_unbounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Unbounded Async SPSC");
         bench_async_spsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::unbounded_channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_spsc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_spsc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
             &rt,
             ZQueue::<CrossbeamSegQueue<_>>::unbounded()
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_async_spsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -425,12 +443,14 @@ fn bench_unbounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Unbounded Async MPSC");
         bench_async_mpsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::unbounded_channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_mpsc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpsc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
             &rt,
             ZQueue::<CrossbeamSegQueue<_>>::unbounded()
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_async_mpsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -457,12 +477,14 @@ fn bench_unbounded_async(c: &mut Criterion) {
         // bench_async_mpmc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base|
         // tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(),
         // |rx| rx.recv_async().await.unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpmc!(
             &mut group,
             "z-queue Crossbeam SegQueue",
             &rt,
             ZQueue::<CrossbeamSegQueue<_>>::unbounded()
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_async_mpmc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -494,12 +516,14 @@ fn bench_bounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Bounded Async SPSC");
         bench_async_spsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).await.unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_spsc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_spsc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
             &rt,
             ZQueue::<CrossbeamArrayQueue<_>>::bounded(BOUND_NON_ZERO)
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_async_spsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -524,12 +548,14 @@ fn bench_bounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Bounded Async MPSC");
         bench_async_mpsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).await.unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_mpsc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpsc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
             &rt,
             ZQueue::<CrossbeamArrayQueue<_>>::bounded(BOUND_NON_ZERO)
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_async_mpsc!(
             &mut group,
             "z-queue SegmentedArray 64",
@@ -556,12 +582,14 @@ fn bench_bounded_async(c: &mut Criterion) {
         // bench_async_mpmc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base|
         // tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(),
         // |rx| rx.recv_async().await.unwrap());
+        #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpmc!(
             &mut group,
             "z-queue Crossbeam ArrayQueue",
             &rt,
             ZQueue::<CrossbeamArrayQueue<_>>::bounded(BOUND_NON_ZERO)
         );
+        #[cfg(feature = "segmented-array")]
         bench_zq_async_mpmc!(
             &mut group,
             "z-queue SegmentedArray 64",

@@ -8,8 +8,9 @@ name = "queue_bench"
 harness = false
 
 [features]
-default = []
+default = ["crossbeam-queue"]
 
+# TODO: Remove std deps
 std = []
 
 crossbeam-queue = ["dep:crossbeam-queue"]
