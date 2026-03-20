@@ -12,7 +12,7 @@ pub mod container;
 mod map;
 mod queue;
 
-pub use self::channel::{Receiver, Sender, bounded, unbounded};
+pub use self::channel::{Receiver, RecvError, SendError, Sender, bounded, unbounded};
 #[cfg(feature = "map")]
 pub use self::map::ZQueueMap;
 pub use self::queue::ZQueue;
