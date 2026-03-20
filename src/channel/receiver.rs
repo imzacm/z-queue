@@ -16,14 +16,15 @@ pub struct Receiver<C> {
     state: Arc<State<C>>,
 }
 
-impl<C> Clone for Receiver<C> {
+impl<C: Container> Clone for Receiver<C> {
     fn clone(&self) -> Self {
-        Self { state: self.state.clone() }
+        Self::new(self.state.clone())
     }
 }
 
 impl<C: Container> Receiver<C> {
     pub(super) fn new(state: Arc<State<C>>) -> Self {
+        state.receiver_count.fetch_add(1, Ordering::Release);
         Self { state }
     }
 
