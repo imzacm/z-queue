@@ -11,11 +11,11 @@ pub const MAX_SMALL_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub struct ZQueue<C> {
-    container: C,
-    has_capacity: bool,
+    pub(crate) container: C,
+    pub(crate) has_capacity: bool,
     find_waiters: CachePadded<AtomicUsize>,
     // Notified on push.
-    push_event: CachePadded<Event>,
+    pub(crate) push_event: CachePadded<Event>,
     // Notified on pop.
     pub(crate) pop_event: CachePadded<Event>,
 }
@@ -108,7 +108,7 @@ impl<C: Container> ZQueue<C> {
                 backoff.snooze();
                 continue;
             }
-            
+
             event_listener::listener!(self.pop_event => listener);
             match self.try_push(item) {
                 Ok(()) => return,
@@ -166,7 +166,7 @@ impl<C: Container> ZQueue<C> {
                 backoff.snooze();
                 continue;
             }
-            
+
             event_listener::listener!(self.push_event => listener);
             if let Some(item) = self.try_pop() {
                 return item;

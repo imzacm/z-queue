@@ -22,6 +22,8 @@ parking = ["event-listener/parking"]
 rand = ["dep:rand"]
 fastrand = ["dep:fastrand"]
 
+triomphe = ["dep:triomphe"]
+
 [dependencies]
 parking_lot = "0.12"
 event-listener = { version = "5.4", default-features = false, features = ["std"] }
@@ -37,6 +39,9 @@ arrayvec = { version = "0.7", optional = true, default-features = false }
 scc = { version = "3.6", optional = true }
 arc-swap = { version = "1.8", optional = true }
 foldhash = { version = "0.2", optional = true, default-features = false }
+
+# Triomphe
+triomphe = { version = "0.1", optional = true }
 
 rand = { version = "0.10", optional = true }
 fastrand = { version = "2.3", optional = true }
