@@ -11,9 +11,15 @@ use triomphe::Arc;
 use super::{RecvError, State};
 use crate::container::Container;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Receiver<C> {
     state: Arc<State<C>>,
+}
+
+impl<C> Clone for Receiver<C> {
+    fn clone(&self) -> Self {
+        Self { state: self.state.clone() }
+    }
 }
 
 impl<C: Container> Receiver<C> {

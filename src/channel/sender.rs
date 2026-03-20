@@ -10,9 +10,15 @@ use triomphe::Arc;
 use super::{SendError, State};
 use crate::container::Container;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Sender<C> {
     state: Arc<State<C>>,
+}
+
+impl<C> Clone for Sender<C> {
+    fn clone(&self) -> Self {
+        Self { state: self.state.clone() }
+    }
 }
 
 impl<C: Container> Sender<C> {
@@ -43,11 +49,11 @@ impl<C: Container> Sender<C> {
     pub fn receiver_count(&self) -> usize {
         self.state.receiver_count.load(Ordering::Acquire)
     }
-    
+
     pub fn is_disconnected(&self) -> bool {
         self.state.receiver_count.load(Ordering::Acquire) == 0
     }
-    
+
     pub fn try_send(&self, item: C::Item) -> Result<(), SendError<C::Item>> {
         if self.state.receiver_count.load(Ordering::Acquire) == 0 {
             return Err(SendError::Disconnected(item));
