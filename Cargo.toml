@@ -37,7 +37,7 @@ arrayvec = { version = "0.7", optional = true, default-features = false }
 
 # Map
 scc = { version = "3.6", optional = true }
-arc-swap = { version = "1.8", optional = true }
+arc-swap = { version = "1.9", optional = true }
 foldhash = { version = "0.2", optional = true, default-features = false }
 
 # Triomphe
