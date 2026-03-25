@@ -3,9 +3,9 @@ use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
-use event_listener::{Event, Listener};
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
+use crate::notify::Notify;
 
 pub const MAX_SMALL_CAPACITY: usize = 1024;
 
@@ -15,9 +15,9 @@ pub struct ZQueue<C> {
     pub(crate) has_capacity: bool,
     find_waiters: CachePadded<AtomicUsize>,
     // Notified on push.
-    pub(crate) push_event: CachePadded<Event>,
+    pub(crate) push_event: Notify,
     // Notified on pop.
-    pub(crate) pop_event: CachePadded<Event>,
+    pub(crate) pop_event: Notify,
 }
 
 impl<C: Container> ZQueue<C> {
@@ -27,8 +27,8 @@ impl<C: Container> ZQueue<C> {
             container,
             has_capacity,
             find_waiters: CachePadded::new(AtomicUsize::new(0)),
-            push_event: CachePadded::new(Event::new()),
-            pop_event: CachePadded::new(Event::new()),
+            push_event: Notify::new(),
+            pop_event: Notify::new(),
         }
     }
 
@@ -81,7 +81,7 @@ impl<C: Container> ZQueue<C> {
         self.container.push(item)?;
 
         let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-        self.push_event.notify_additional(find_waiters + 1);
+        self.push_event.notify(find_waiters + 1);
         Ok(())
     }
 
@@ -109,7 +109,7 @@ impl<C: Container> ZQueue<C> {
                 continue;
             }
 
-            event_listener::listener!(self.pop_event => listener);
+            let listener = self.pop_event.listener();
             match self.try_push(item) {
                 Ok(()) => return,
                 Err(v) => item = v,
@@ -132,7 +132,7 @@ impl<C: Container> ZQueue<C> {
                 Err(v) => item = v,
             }
 
-            event_listener::listener!(self.pop_event => listener);
+            let listener = self.pop_event.listener();
             match self.try_push(item) {
                 Ok(()) => return,
                 Err(v) => item = v,
@@ -146,7 +146,7 @@ impl<C: Container> ZQueue<C> {
     pub fn try_pop(&self) -> Option<C::Item> {
         let item = self.container.pop();
         if item.is_some() && self.has_capacity {
-            self.pop_event.notify_additional(1);
+            self.pop_event.notify(1);
         }
         item
     }
@@ -167,7 +167,7 @@ impl<C: Container> ZQueue<C> {
                 continue;
             }
 
-            event_listener::listener!(self.push_event => listener);
+            let listener = self.push_event.listener();
             if let Some(item) = self.try_pop() {
                 return item;
             }
@@ -181,7 +181,7 @@ impl<C: Container> ZQueue<C> {
                 return item;
             }
 
-            event_listener::listener!(self.push_event => listener);
+            let listener = self.push_event.listener();
             if let Some(item) = self.try_pop() {
                 return item;
             }
@@ -197,7 +197,7 @@ impl<C: Container> ZQueue<C> {
     {
         let item = self.container.find_pop(find_fn);
         if item.is_some() && self.has_capacity {
-            self.pop_event.notify_additional(1);
+            self.pop_event.notify(1);
         }
         item
     }
@@ -223,7 +223,7 @@ impl<C: Container> ZQueue<C> {
                 continue;
             }
 
-            event_listener::listener!(self.push_event => listener);
+            let listener = self.push_event.listener();
             if let Some(item) = self.try_find(&mut find_fn) {
                 self.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
@@ -244,7 +244,7 @@ impl<C: Container> ZQueue<C> {
                 return item;
             }
 
-            event_listener::listener!(self.push_event => listener);
+            let listener = self.push_event.listener();
             if let Some(item) = self.try_find(&mut find_fn) {
                 self.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
@@ -277,7 +277,7 @@ impl<C: Container> ZQueue<C> {
         };
 
         if self.has_capacity && removed > 0 {
-            self.pop_event.notify_additional(removed);
+            self.pop_event.notify(removed);
         }
     }
 
@@ -294,7 +294,7 @@ impl<C: Container> ZQueue<C> {
         let removed = into.len() - old_len;
 
         if self.has_capacity && removed > 0 {
-            self.pop_event.notify_additional(removed);
+            self.pop_event.notify(removed);
         }
     }
 

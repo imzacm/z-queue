@@ -24,15 +24,18 @@ impl<T> CreateBounded for CrossbeamArrayQueue<T> {
 impl<T> Container for CrossbeamArrayQueue<T> {
     type Item = T;
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.queue.len()
     }
 
+    #[inline(always)]
     fn capacity(&self) -> Option<NonZeroUsize> {
-        let capacity = NonZeroUsize::new(self.queue.capacity()).unwrap();
+        let capacity = unsafe { NonZeroUsize::new_unchecked(self.queue.capacity()) };
         Some(capacity)
     }
 
+    #[inline(always)]
     fn clear(&self) -> usize {
         let mut removed = 0;
         while self.queue.pop().is_some() {
@@ -41,11 +44,13 @@ impl<T> Container for CrossbeamArrayQueue<T> {
         removed
     }
 
+    #[inline(always)]
     fn push(&self, item: T) -> Result<(), T> {
         let _guard = self.state.push();
         self.queue.push(item)
     }
 
+    #[inline(always)]
     fn pop(&self) -> Option<T> {
         let _guard = self.state.pop();
         self.queue.pop()

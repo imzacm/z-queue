@@ -1,4 +1,4 @@
-#![deny(unused_imports, unsafe_code, clippy::all)]
+#![deny(unused_imports, clippy::all)]
 #![no_std]
 
 #[cfg(feature = "std")]
@@ -10,6 +10,7 @@ mod channel;
 pub mod container;
 #[cfg(feature = "map")]
 mod map;
+pub mod notify;
 mod queue;
 
 pub use self::channel::{Receiver, RecvError, SendError, Sender, bounded, unbounded};

@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 use core::sync::atomic::Ordering;
 
-use event_listener::Listener;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
 
@@ -28,36 +27,44 @@ impl<C: Container> Receiver<C> {
         Self { state }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.state.queue.len()
     }
 
+    #[inline(always)]
     pub fn capacity(&self) -> Option<NonZeroUsize> {
         self.state.queue.capacity()
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.state.queue.is_empty()
     }
 
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.state.queue.is_full()
     }
 
+    #[inline(always)]
     pub fn sender_count(&self) -> usize {
         self.state.sender_count.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     pub fn receiver_count(&self) -> usize {
         self.state.receiver_count.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
-        self.state.sender_count.load(Ordering::Acquire) == 0
+        self.sender_count() == 0
     }
 
+    #[inline(always)]
     pub fn try_recv(&self) -> Result<Option<C::Item>, RecvError> {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         Ok(self.state.queue.try_pop())
@@ -83,7 +90,7 @@ impl<C: Container> Receiver<C> {
                 continue;
             }
 
-            event_listener::listener!(self.state.queue.push_event => listener);
+            let listener = self.state.queue.push_event.listener();
             match self.try_recv() {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => (),
@@ -102,7 +109,7 @@ impl<C: Container> Receiver<C> {
                 Err(e) => return Err(e),
             }
 
-            event_listener::listener!(self.state.queue.push_event => listener);
+            let listener = self.state.queue.push_event.listener();
             match self.try_recv() {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => (),
@@ -113,11 +120,12 @@ impl<C: Container> Receiver<C> {
         }
     }
 
+    #[inline(always)]
     pub fn try_find<F>(&self, find_fn: F) -> Result<Option<C::Item>, RecvError>
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         Ok(self.state.queue.try_find(find_fn))
@@ -146,7 +154,7 @@ impl<C: Container> Receiver<C> {
                 continue;
             }
 
-            event_listener::listener!(self.state.queue.push_event => listener);
+            let listener = self.state.queue.push_event.listener();
             match self.try_find(&mut find_fn) {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => (),
@@ -168,7 +176,7 @@ impl<C: Container> Receiver<C> {
                 Err(e) => return Err(e),
             }
 
-            event_listener::listener!(self.state.queue.push_event => listener);
+            let listener = self.state.queue.push_event.listener();
             match self.try_find(&mut find_fn) {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => (),
@@ -179,33 +187,36 @@ impl<C: Container> Receiver<C> {
         }
     }
 
+    #[inline(always)]
     pub fn retain<F>(&self, retain_fn: F) -> Result<(), RecvError>
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         self.state.queue.retain(retain_fn);
         Ok(())
     }
 
+    #[inline(always)]
     pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<C::Item>) -> Result<(), RecvError>
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         self.state.queue.retain_into(retain_fn, into);
         Ok(())
     }
 
+    #[inline(always)]
     pub fn visit<F>(&self, visit_fn: F) -> Result<(), RecvError>
     where
         F: FnMut(&C::Item),
     {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         self.state.queue.visit(visit_fn);
@@ -214,7 +225,7 @@ impl<C: Container> Receiver<C> {
 
     #[cfg(feature = "rand")]
     pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) -> Result<(), RecvError> {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         self.state.queue.rand_shuffle(rng);
@@ -223,7 +234,7 @@ impl<C: Container> Receiver<C> {
 
     #[cfg(feature = "fastrand")]
     pub fn fastrand_shuffle(&self) -> Result<(), RecvError> {
-        if self.state.sender_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
         self.state.queue.fastrand_shuffle();

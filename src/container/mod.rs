@@ -92,16 +92,22 @@ mod state {
             value: &'v AtomicUsize,
             suspend: &AtomicBool,
         ) -> ContainerStateGuard<'v> {
+            let backoff = crossbeam_utils::Backoff::new();
             loop {
+                // Avoid dirtying the cache line if already suspended.
+                if suspend.load(Ordering::Relaxed) {
+                    backoff.snooze();
+                    continue;
+                }
+
                 value.fetch_add(1, Ordering::SeqCst);
 
                 if !suspend.load(Ordering::SeqCst) {
                     return ContainerStateGuard { value };
                 }
 
-                value.fetch_sub(1, Ordering::SeqCst);
+                value.fetch_sub(1, Ordering::Release);
 
-                let backoff = crossbeam_utils::Backoff::new();
                 while suspend.load(Ordering::Relaxed) {
                     backoff.snooze();
                 }
@@ -116,7 +122,6 @@ mod state {
             Self::push_pop(&self.active_pops, &self.suspend)
         }
 
-        #[inline(always)]
         pub fn suspend(&self) -> ContainerSuspendGuard<'_> {
             let backoff = crossbeam_utils::Backoff::new();
 

@@ -39,7 +39,7 @@ macro_rules! bench_sync_spsc {
                 let (tx_base, mut rx_base) = $setup;
                 let $tx_base = &tx_base;
                 let $tx = $clone_tx;
-                thread::spawn(move || {
+                let handle = thread::spawn(move || {
                     for $val in 0..MESSAGES {
                         $send;
                     }
@@ -48,6 +48,8 @@ macro_rules! bench_sync_spsc {
                 for _ in 0..MESSAGES {
                     std::hint::black_box($recv);
                 }
+
+                handle.join().unwrap();
             })
         });
     };
@@ -140,7 +142,7 @@ macro_rules! bench_async_spsc {
                 let (tx_base, mut rx_base) = $setup;
                 let $tx_base = &tx_base;
                 let $tx = $clone_tx;
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     for $val in 0..MESSAGES {
                         $send;
                     }
@@ -149,6 +151,7 @@ macro_rules! bench_async_spsc {
                 for _ in 0..MESSAGES {
                     std::hint::black_box($recv);
                 }
+                handle.await.unwrap();
             })
         });
     };

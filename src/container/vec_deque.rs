@@ -39,20 +39,24 @@ impl<T> CreateUnbounded for VecDeque<T> {
 impl<T> Container for VecDeque<T> {
     type Item = T;
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     fn capacity(&self) -> Option<NonZeroUsize> {
         self.capacity
     }
 
+    #[inline(always)]
     fn clear(&self) -> usize {
         let mut lock = self.queue.lock();
         lock.clear();
         self.len.swap(0, Ordering::AcqRel)
     }
 
+    #[inline(always)]
     fn push(&self, item: T) -> Result<(), T> {
         if self.is_full() {
             return Err(item);
@@ -64,6 +68,7 @@ impl<T> Container for VecDeque<T> {
         Ok(())
     }
 
+    #[inline(always)]
     fn pop(&self) -> Option<T> {
         let mut lock = self.queue.lock();
         let item = lock.pop_front();
@@ -73,6 +78,7 @@ impl<T> Container for VecDeque<T> {
         item
     }
 
+    #[inline(always)]
     fn find_pop<F>(&self, find_fn: F) -> Option<T>
     where
         F: FnMut(&T) -> bool,
@@ -84,6 +90,7 @@ impl<T> Container for VecDeque<T> {
         Some(item)
     }
 
+    #[inline(always)]
     fn retain<F>(&self, retain_fn: F) -> usize
     where
         F: FnMut(&T) -> bool,
@@ -96,6 +103,7 @@ impl<T> Container for VecDeque<T> {
         old_len - new_len
     }
 
+    #[inline(always)]
     fn retain_into<F>(&self, retain_fn: F, removed: &mut Vec<T>)
     where
         F: FnMut(&T) -> bool,
@@ -105,6 +113,7 @@ impl<T> Container for VecDeque<T> {
         self.len.store(lock.len(), Ordering::Release);
     }
 
+    #[inline(always)]
     fn visit<F>(&self, mut visit_fn: F)
     where
         F: FnMut(&Self::Item),
@@ -144,7 +153,7 @@ where
         };
 
         // Safe to unwrap because we just verified `front` is `Some`
-        let item = queue.pop_front().unwrap();
+        let item = unsafe { queue.pop_front().unwrap_unchecked() };
 
         if keep {
             // Kept items are cycled to the back of the queue

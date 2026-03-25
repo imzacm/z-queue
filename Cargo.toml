@@ -4,20 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [[bench]]
-name = "queue_bench"
+name = "queue"
+harness = false
+
+[[bench]]
+name = "notify"
 harness = false
 
 [features]
 default = ["crossbeam-queue"]
 
 # TODO: Remove std deps
-std = []
+std = ["crossbeam-utils/std"]
 
 crossbeam-queue = ["dep:crossbeam-queue"]
 segmented-array = ["dep:arrayvec"]
 map = ["dep:scc", "dep:arc-swap", "dep:foldhash"]
-
-parking = ["event-listener/parking"]
 
 rand = ["dep:rand"]
 fastrand = ["dep:fastrand"]
@@ -26,7 +28,7 @@ triomphe = ["dep:triomphe"]
 
 [dependencies]
 parking_lot = "0.12"
-event-listener = { version = "5.4", default-features = false, features = ["std"] }
+parking_lot_core = "0.9"
 crossbeam-utils = { version = "0.8", default-features = false }
 
 # Crossbeam Queue
@@ -41,7 +43,7 @@ arc-swap = { version = "1.9", optional = true }
 foldhash = { version = "0.2", optional = true, default-features = false }
 
 # Triomphe
-triomphe = { version = "0.1", optional = true }
+triomphe = { version = "0.1", optional = true, features = ["arc-swap"] }
 
 rand = { version = "0.10", optional = true }
 fastrand = { version = "2.3", optional = true }
@@ -51,3 +53,5 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 tokio = { version = "1", features = ["full"] }
 flume = "0.12"
 crossbeam-channel = "0.5"
+# For notify benchmark
+event-listener = "5.4"

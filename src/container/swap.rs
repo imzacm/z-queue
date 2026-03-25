@@ -20,7 +20,7 @@ where
 {
     fn new_bounded(capacity: NonZeroUsize) -> Self {
         let container_capacity = capacity.get().div_ceil(N);
-        let container_capacity = NonZeroUsize::new(container_capacity).unwrap();
+        let container_capacity = unsafe { NonZeroUsize::new_unchecked(container_capacity) };
         let containers = core::array::from_fn(|_| C::new_bounded(container_capacity));
 
         Self {
@@ -53,14 +53,17 @@ where
 {
     type Item = C::Item;
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.containers.iter().map(|c| c.len()).sum()
     }
 
+    #[inline(always)]
     fn capacity(&self) -> Option<NonZeroUsize> {
         self.capacity
     }
 
+    #[inline(always)]
     fn clear(&self) -> usize {
         let mut removed = 0;
         for container in &self.containers {

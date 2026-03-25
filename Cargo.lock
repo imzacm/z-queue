@@ -721,9 +721,9 @@ dependencies = [
 
 [[package]]
 name = "scc"
-version = "3.6.11"
+version = "3.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e0fa9801e22430b9ddd8f10b981e42fed14367508a07b5cb713cab979b1d51"
+checksum = "f448f7d881535036452f0cac656a41463807f095eda504890764ca7d11e2a2ea"
 dependencies = [
  "saa",
  "sdd",
@@ -892,6 +892,7 @@ version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd69c5aa8f924c7519d6372789a74eac5b94fb0f8fcf0d4a97eb0bfc3e785f39"
 dependencies = [
+ "arc-swap",
  "serde",
  "stable_deref_trait",
 ]
@@ -1180,6 +1181,7 @@ dependencies = [
  "flume",
  "foldhash 0.2.0",
  "parking_lot",
+ "parking_lot_core",
  "rand",
  "scc",
  "tokio",

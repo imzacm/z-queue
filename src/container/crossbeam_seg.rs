@@ -21,14 +21,17 @@ impl<T> CreateUnbounded for CrossbeamSegQueue<T> {
 impl<T> Container for CrossbeamSegQueue<T> {
     type Item = T;
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.queue.len()
     }
 
+    #[inline(always)]
     fn capacity(&self) -> Option<NonZeroUsize> {
         None
     }
 
+    #[inline(always)]
     fn clear(&self) -> usize {
         let mut removed = 0;
         while self.queue.pop().is_some() {
@@ -37,12 +40,14 @@ impl<T> Container for CrossbeamSegQueue<T> {
         removed
     }
 
+    #[inline(always)]
     fn push(&self, item: T) -> Result<(), T> {
         let _guard = self.state.push();
         self.queue.push(item);
         Ok(())
     }
 
+    #[inline(always)]
     fn pop(&self) -> Option<T> {
         let _guard = self.state.pop();
         self.queue.pop()

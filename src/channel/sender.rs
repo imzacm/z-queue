@@ -3,7 +3,6 @@ use alloc::sync::Arc;
 use core::num::NonZeroUsize;
 use core::sync::atomic::Ordering;
 
-use event_listener::Listener;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
 
@@ -27,36 +26,44 @@ impl<C: Container> Sender<C> {
         Self { state }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.state.queue.len()
     }
 
+    #[inline(always)]
     pub fn capacity(&self) -> Option<NonZeroUsize> {
         self.state.queue.capacity()
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.state.queue.is_empty()
     }
 
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.state.queue.is_full()
     }
 
+    #[inline(always)]
     pub fn sender_count(&self) -> usize {
         self.state.sender_count.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     pub fn receiver_count(&self) -> usize {
         self.state.receiver_count.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     pub fn is_disconnected(&self) -> bool {
-        self.state.receiver_count.load(Ordering::Acquire) == 0
+        self.receiver_count() == 0
     }
 
+    #[inline(always)]
     pub fn try_send(&self, item: C::Item) -> Result<(), SendError<C::Item>> {
-        if self.state.receiver_count.load(Ordering::Acquire) == 0 {
+        if self.is_disconnected() {
             return Err(SendError::Disconnected(item));
         }
         self.state.queue.try_push(item).map_err(SendError::Full)
@@ -91,7 +98,7 @@ impl<C: Container> Sender<C> {
                 continue;
             }
 
-            event_listener::listener!(self.state.queue.pop_event => listener);
+            let listener = self.state.queue.pop_event.listener();
             match self.try_send(item) {
                 Ok(()) => return Ok(()),
                 Err(SendError::Disconnected(v)) => return Err(SendError::Disconnected(v)),
@@ -119,7 +126,7 @@ impl<C: Container> Sender<C> {
                 Err(SendError::Full(v)) => item = v,
             }
 
-            event_listener::listener!(self.state.queue.pop_event => listener);
+            let listener = self.state.queue.pop_event.listener();
             match self.try_send(item) {
                 Ok(()) => return Ok(()),
                 Err(SendError::Disconnected(v)) => return Err(SendError::Disconnected(v)),

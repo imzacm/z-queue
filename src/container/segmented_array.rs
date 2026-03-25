@@ -44,14 +44,17 @@ impl<T, const SEGMENT_SIZE: usize> CreateUnbounded for SegmentedArray<T, SEGMENT
 impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE> {
     type Item = T;
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     fn capacity(&self) -> Option<NonZeroUsize> {
         self.capacity
     }
 
+    #[inline(always)]
     fn clear(&self) -> usize {
         let mut lock = self.queue.lock();
         lock.clear();
