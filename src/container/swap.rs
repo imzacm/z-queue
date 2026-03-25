@@ -73,28 +73,23 @@ where
     }
 
     fn push(&self, mut item: Self::Item) -> Result<(), Self::Item> {
-        if self.is_full() {
-            return Err(item);
-        }
+        let start_index = self.push_index.fetch_add(1, Ordering::Relaxed) % N;
 
-        let start_index = self.push_index.fetch_add(1, Ordering::Release);
-        for index in 0..N {
-            let index = (start_index + index) % N;
-            let container = &self.containers[index];
+        let (left, right) = self.containers.split_at(start_index);
+        for container in right.iter().chain(left.iter()) {
             match container.push(item) {
                 Ok(()) => return Ok(()),
                 Err(v) => item = v,
             }
         }
-
         Err(item)
     }
 
     fn pop(&self) -> Option<Self::Item> {
-        let start_index = self.pop_index.fetch_add(1, Ordering::Release);
-        for index in 0..N {
-            let index = (start_index + index) % N;
-            let container = &self.containers[index];
+        let start_index = self.pop_index.fetch_add(1, Ordering::Relaxed) % N;
+
+        let (left, right) = self.containers.split_at(start_index);
+        for container in right.iter().chain(left.iter()) {
             if let Some(item) = container.pop() {
                 return Some(item);
             }
@@ -106,10 +101,10 @@ where
     where
         F: FnMut(&Self::Item) -> bool,
     {
-        let start_index = self.pop_index.fetch_add(1, Ordering::Relaxed);
-        for index in 0..N {
-            let index = (start_index + index) % N;
-            let container = &self.containers[index];
+        let start_index = self.pop_index.fetch_add(1, Ordering::Relaxed) % N;
+
+        let (left, right) = self.containers.split_at(start_index);
+        for container in right.iter().chain(left.iter()) {
             if let Some(item) = container.find_pop(&mut find_fn) {
                 return Some(item);
             }

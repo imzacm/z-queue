@@ -59,7 +59,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
         let mut lock = self.queue.lock();
         lock.clear();
         lock.push_back(ArrayVec::new());
-        self.len.swap(0, Ordering::Acquire)
+        self.len.swap(0, Ordering::Release)
     }
 
     fn push(&self, item: T) -> Result<(), T> {

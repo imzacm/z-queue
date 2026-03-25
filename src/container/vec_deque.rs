@@ -53,7 +53,7 @@ impl<T> Container for VecDeque<T> {
     fn clear(&self) -> usize {
         let mut lock = self.queue.lock();
         lock.clear();
-        self.len.swap(0, Ordering::AcqRel)
+        self.len.swap(0, Ordering::Release)
     }
 
     #[inline(always)]
@@ -78,7 +78,6 @@ impl<T> Container for VecDeque<T> {
         item
     }
 
-    #[inline(always)]
     fn find_pop<F>(&self, find_fn: F) -> Option<T>
     where
         F: FnMut(&T) -> bool,
@@ -90,7 +89,6 @@ impl<T> Container for VecDeque<T> {
         Some(item)
     }
 
-    #[inline(always)]
     fn retain<F>(&self, retain_fn: F) -> usize
     where
         F: FnMut(&T) -> bool,
