@@ -1,25 +1,29 @@
+#[cfg(not(feature = "thin-vec"))]
 use alloc::vec::Vec;
-use core::num::NonZeroU64;
+use core::num::NonZeroU32;
 use core::task::Waker;
+
+#[cfg(feature = "thin-vec")]
+use thin_vec::ThinVec as Vec;
 
 /// An allocation-free, generational doubly-linked list node.
 #[derive(Debug)]
 pub struct WakerNode {
     /// Prevents the ABA problem if a slot is rapidly reused.
-    generation: u32,
+    generation: u16,
     waker: Option<Waker>,
-    prev: u32,
-    next: u32,
+    prev: u16,
+    next: u16,
 }
 
 impl WakerNode {
-    const NULL_NODE: u32 = u32::MAX;
+    const NULL_NODE: u16 = u16::MAX;
 
-    const fn new(prev: u32, next: u32) -> Self {
+    const fn new(prev: u16, next: u16) -> Self {
         Self { generation: 0, waker: None, prev, next }
     }
 
-    pub const fn generation(&self) -> u32 {
+    pub const fn generation(&self) -> u16 {
         self.generation
     }
 
@@ -33,26 +37,26 @@ impl WakerNode {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct WakerTicket(NonZeroU64);
+pub struct WakerTicket(NonZeroU32);
 
 impl WakerTicket {
     #[inline(always)]
-    pub const fn new(index: u32, generation: u32) -> Self {
+    pub const fn new(index: u16, generation: u16) -> Self {
         // Shift index to the top 32 bits, generation to the bottom 32.
-        let value = ((index as u64) << 32) | (generation as u64);
+        let value = ((index as u32) << 16) | (generation as u32);
         // Add 1 so the bit pattern is never zero, allowing Option to use 0 as `None`
-        let value = unsafe { NonZeroU64::new_unchecked(value + 1) };
+        let value = unsafe { NonZeroU32::new_unchecked(value + 1) };
         Self(value)
     }
 
     #[inline(always)]
-    pub const fn index(self) -> u32 {
-        ((self.0.get() - 1) >> 32) as u32
+    pub const fn index(self) -> u16 {
+        ((self.0.get() - 1) >> 16) as u16
     }
 
     #[inline(always)]
-    pub const fn generation(self) -> u32 {
-        (self.0.get() - 1) as u32
+    pub const fn generation(self) -> u16 {
+        (self.0.get() - 1) as u16
     }
 }
 
@@ -62,16 +66,16 @@ impl WakerTicket {
 pub struct WakerQueue<const ARRAY_CAPACITY: usize> {
     nodes_array: [WakerNode; ARRAY_CAPACITY],
     nodes_vec: Vec<WakerNode>,
-    head: u32,
-    tail: u32,
-    free_head: u32,
+    head: u16,
+    tail: u16,
+    free_head: u16,
 }
 
 impl<const ARRAY_CAPACITY: usize> WakerQueue<ARRAY_CAPACITY> {
     pub fn new() -> Self {
         assert!(
-            ARRAY_CAPACITY < u32::MAX as usize,
-            "WakerQueue capacity must be less than `u32::MAX`"
+            ARRAY_CAPACITY < u16::MAX as usize,
+            "WakerQueue capacity must be less than `u16::MAX`"
         );
 
         Self {
@@ -79,7 +83,7 @@ impl<const ARRAY_CAPACITY: usize> WakerQueue<ARRAY_CAPACITY> {
                 let next = if index == ARRAY_CAPACITY - 1 {
                     WakerNode::NULL_NODE
                 } else {
-                    (index + 1) as u32
+                    (index + 1) as u16
                 };
                 WakerNode::new(WakerNode::NULL_NODE, next)
             }),
@@ -92,7 +96,7 @@ impl<const ARRAY_CAPACITY: usize> WakerQueue<ARRAY_CAPACITY> {
 
     /// Helper to seamlessly index into either the inline array or the fallback vector.
     #[inline(always)]
-    pub fn node_mut(&mut self, index: u32) -> &mut WakerNode {
+    pub fn node_mut(&mut self, index: u16) -> &mut WakerNode {
         let index = index as usize;
         if index < ARRAY_CAPACITY {
             unsafe { self.nodes_array.get_unchecked_mut(index) }
@@ -109,7 +113,7 @@ impl<const ARRAY_CAPACITY: usize> WakerQueue<ARRAY_CAPACITY> {
             self.free_head = self.node_mut(index).next;
             index
         } else {
-            let index = (ARRAY_CAPACITY + self.nodes_vec.len()) as u32;
+            let index = (ARRAY_CAPACITY + self.nodes_vec.len()) as u16;
             self.nodes_vec.push(WakerNode::new(WakerNode::NULL_NODE, WakerNode::NULL_NODE));
             index
         };

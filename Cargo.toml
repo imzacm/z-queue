@@ -17,7 +17,7 @@ name = "recv_stream"
 harness = false
 
 [features]
-default = ["crossbeam-queue", "std"]
+default = ["crossbeam-queue", "std", "thin-vec"]
 
 # TODO: Remove std deps
 std = ["crossbeam-utils/std"]
@@ -32,6 +32,7 @@ rand = ["dep:rand"]
 fastrand = ["dep:fastrand"]
 
 triomphe = ["dep:triomphe"]
+thin-vec = ["dep:thin-vec"]
 
 [dependencies]
 parking_lot = "0.12"
@@ -55,6 +56,9 @@ foldhash = { version = "0.2", optional = true, default-features = false }
 
 # Triomphe
 triomphe = { version = "0.1", optional = true, features = ["arc-swap"] }
+
+# ThinVec
+thin-vec = { version = "0.2", optional = true }
 
 rand = { version = "0.10", optional = true }
 fastrand = { version = "2.3", optional = true }
