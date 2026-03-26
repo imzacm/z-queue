@@ -3,7 +3,7 @@ mod select;
 mod waker_queue;
 
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Waker;
 
 use crossbeam_utils::CachePadded;
@@ -14,7 +14,27 @@ pub use self::listener::NotifyListener;
 pub use self::select::select_blocking;
 use self::waker_queue::WakerQueue;
 
-const ASYNC_CAPACITY: usize = 8;
+const ASYNC_CAPACITY: usize = 2;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct NotifyState(u64);
+
+impl NotifyState {
+    #[inline(always)]
+    const fn epoch(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+
+    #[inline(always)]
+    const fn parked(self) -> u16 {
+        (self.0 >> 16) as u16
+    }
+
+    #[inline(always)]
+    const fn wakers(self) -> u16 {
+        self.0 as u16
+    }
+}
 
 /// A lightweight notification primitive supporting both blocking and async waiters.
 ///
@@ -27,12 +47,12 @@ const ASYNC_CAPACITY: usize = 8;
 /// was fired *after* the listener was registered.
 #[derive(Debug)]
 pub struct Notify {
-    epoch: CachePadded<AtomicU64>,
-    /// Hint: number of threads currently parked via `parking_lot_core`.
-    /// Used to skip the expensive `unpark_*` call when no one is waiting.
-    parked_count: CachePadded<AtomicU32>,
-    async_count: CachePadded<AtomicU32>,
-    async_wakers: CachePadded<Mutex<WakerQueue<ASYNC_CAPACITY>>>,
+    /// Bit layout:
+    /// - 0..16: async wakers count (u16)
+    /// - 16..32: parked threads count (u16)
+    /// - 32..64: epoch (u32)
+    state: CachePadded<AtomicU64>,
+    async_wakers: Mutex<WakerQueue<ASYNC_CAPACITY>>,
 }
 
 impl Default for Notify {
@@ -44,11 +64,35 @@ impl Default for Notify {
 impl Notify {
     pub fn new() -> Self {
         Self {
-            epoch: CachePadded::new(AtomicU64::new(0)),
-            parked_count: CachePadded::new(AtomicU32::new(0)),
-            async_count: CachePadded::new(AtomicU32::new(0)),
-            async_wakers: CachePadded::new(Mutex::new(WakerQueue::new())),
+            state: CachePadded::new(AtomicU64::new(0)),
+            async_wakers: Mutex::new(WakerQueue::new()),
         }
+    }
+
+    #[inline(always)]
+    fn load_state(&self, ordering: Ordering) -> NotifyState {
+        let value = self.state.load(ordering);
+        NotifyState(value)
+    }
+
+    #[inline(always)]
+    fn add_parkers(&self, n: u16, ordering: Ordering) {
+        self.state.fetch_add((n as u64) << 16, ordering);
+    }
+
+    #[inline(always)]
+    fn add_wakers(&self, n: u16, ordering: Ordering) {
+        self.state.fetch_add(n as u64, ordering);
+    }
+
+    #[inline(always)]
+    fn sub_parkers(&self, n: u16, ordering: Ordering) {
+        self.state.fetch_sub((n as u64) << 16, ordering);
+    }
+
+    #[inline(always)]
+    fn sub_wakers(&self, n: u16, ordering: Ordering) {
+        self.state.fetch_sub(n as u64, ordering);
     }
 
     /// Creates a listener that captures the current epoch.
@@ -59,9 +103,9 @@ impl Notify {
     /// // re-check your condition here
     /// listener.wait();   // or  listener.await
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn listener(&self) -> NotifyListener<'_> {
-        let epoch = self.epoch.load(Ordering::Acquire);
+        let epoch = self.load_state(Ordering::Acquire).epoch();
         NotifyListener::new(self, epoch)
     }
 
@@ -73,15 +117,22 @@ impl Notify {
         if n == 0 {
             return;
         }
-        self.epoch.fetch_add(1, Ordering::SeqCst);
+
+        // Increment epoch and read counts at same time.
+        //
+        // Incrementing the epoch by 1 adds `1 << 32` to the underlying u64.
+        // This leaves the lower 32 bits (parked and wakers) perfectly intact.
+        let state = NotifyState(self.state.fetch_add(1 << 32, Ordering::Release));
 
         let mut remaining = n;
 
         // Wake async waiters first (cheaper than syscalls).
-        remaining = self.wake_async(remaining);
+        if state.wakers() > 0 {
+            remaining = self.wake_async(remaining);
+        }
 
         // Wake blocked threads only if any are actually parked.
-        if remaining > 0 {
+        if state.parked() > 0 && remaining > 0 {
             self.wake_blocking(remaining);
         }
     }
@@ -89,10 +140,6 @@ impl Notify {
     /// Returns remaining.
     fn wake_async(&self, mut remaining: usize) -> usize {
         const BATCH_SIZE: usize = 32;
-
-        if self.async_count.load(Ordering::SeqCst) == 0 {
-            return remaining;
-        }
 
         loop {
             let mut popped = 0;
@@ -115,7 +162,7 @@ impl Notify {
                 break;
             }
 
-            self.async_count.fetch_sub(popped as u32, Ordering::SeqCst);
+            self.sub_wakers(popped as u16, Ordering::SeqCst);
 
             for waker in &mut wakers[..popped] {
                 // SAFETY: We explicitly initialized exactly `popped` elements
@@ -135,10 +182,6 @@ impl Notify {
 
     /// Returns remaining.
     fn wake_blocking(&self, n: usize) -> usize {
-        if self.parked_count.load(Ordering::SeqCst) == 0 {
-            return n;
-        }
-
         let mut remaining = n;
 
         let key = self.parking_key();
@@ -168,9 +211,9 @@ impl Notify {
     }
 
     /// The address used as the parking key.
-    #[inline]
+    #[inline(always)]
     fn parking_key(&self) -> usize {
-        core::ptr::from_ref(&self.epoch) as usize
+        core::ptr::from_ref(&self.state) as usize
     }
 }
 

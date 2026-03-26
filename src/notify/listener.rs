@@ -16,14 +16,13 @@ use super::waker_queue::WakerTicket;
 pub struct NotifyListener<'a> {
     notify: &'a Notify,
     /// The epoch snapshot taken when this listener was created.
-    epoch: u64,
-    key: usize,
+    epoch: u32,
     waker_node_ticket: Option<WakerTicket>,
 }
 
 impl<'a> NotifyListener<'a> {
-    pub(super) fn new(notify: &'a Notify, epoch: u64) -> Self {
-        Self { notify, epoch, key: notify.parking_key(), waker_node_ticket: None }
+    pub(super) fn new(notify: &'a Notify, epoch: u32) -> Self {
+        Self { notify, epoch, waker_node_ticket: None }
     }
 
     #[inline(always)]
@@ -39,7 +38,7 @@ impl<'a> NotifyListener<'a> {
     /// Returns `true` if a notification has occurred since this listener was created.
     #[inline(always)]
     pub fn is_notified(&self) -> bool {
-        self.notify.epoch.load(Ordering::Acquire) != self.epoch
+        self.notify.load_state(Ordering::Acquire).epoch() != self.epoch
     }
 
     #[cfg(feature = "std")]
@@ -60,7 +59,7 @@ impl<'a> NotifyListener<'a> {
             core::hint::spin_loop();
         }
 
-        self.notify.parked_count.fetch_add(1, Ordering::SeqCst);
+        self.notify.add_parkers(1, Ordering::SeqCst);
 
         loop {
             // SAFETY: We use the epoch address as a stable key.
@@ -68,7 +67,7 @@ impl<'a> NotifyListener<'a> {
             // internal lock, preventing missed wakeups.
             unsafe {
                 parking_lot_core::park(
-                    self.key,
+                    self.notify.parking_key(),
                     || !self.is_notified(), // validate: should we actually park?
                     || {},                  // before_sleep: nothing to do
                     |_, _| {},              // timed_out: not using timeouts
@@ -78,7 +77,7 @@ impl<'a> NotifyListener<'a> {
             }
 
             if self.is_notified() {
-                self.notify.parked_count.fetch_sub(1, Ordering::Relaxed);
+                self.notify.sub_parkers(1, Ordering::Relaxed);
                 return;
             }
 
@@ -106,7 +105,7 @@ impl<'a> Future for NotifyListener<'a> {
             if let Some(ticket) = this.waker_node_ticket.take()
                 && queue.remove(ticket)
             {
-                self.notify.async_count.fetch_sub(1, Ordering::Relaxed);
+                self.notify.sub_wakers(1, Ordering::Relaxed);
             }
 
             return Poll::Ready(());
@@ -123,19 +122,19 @@ impl<'a> Future for NotifyListener<'a> {
                 // Our slot was popped and recycled by a previous wakeup. We must re-enqueue
                 // ourselves to prevent a lost wakeup.
                 this.waker_node_ticket = Some(queue.push(cx.waker().clone()));
-                this.notify.async_count.fetch_add(1, Ordering::SeqCst);
+                this.notify.add_wakers(1, Ordering::SeqCst);
             }
         } else {
             // First time being polled.
             this.waker_node_ticket = Some(queue.push(cx.waker().clone()));
-            this.notify.async_count.fetch_add(1, Ordering::SeqCst);
+            this.notify.add_wakers(1, Ordering::SeqCst);
         }
 
         if this.is_notified() {
             if let Some(ticket) = this.waker_node_ticket.take()
                 && queue.remove(ticket)
             {
-                self.notify.async_count.fetch_sub(1, Ordering::Relaxed);
+                self.notify.sub_wakers(1, Ordering::Relaxed);
             }
             return Poll::Ready(());
         }
@@ -149,7 +148,7 @@ impl<'a> Drop for NotifyListener<'a> {
         if let Some(ticket) = self.waker_node_ticket.take()
             && self.notify.async_wakers.lock().remove(ticket)
         {
-            self.notify.async_count.fetch_sub(1, Ordering::Relaxed);
+            self.notify.sub_wakers(1, Ordering::Relaxed);
         }
     }
 }
@@ -222,7 +221,7 @@ mod timeout {
                 core::hint::spin_loop();
             }
 
-            self.listener.notify.parked_count.fetch_add(1, Ordering::SeqCst);
+            self.listener.notify.add_parkers(1, Ordering::SeqCst);
 
             loop {
                 if std::time::Instant::now() >= timeout {
@@ -234,7 +233,7 @@ mod timeout {
                 // internal lock, preventing missed wakeups.
                 unsafe {
                     parking_lot_core::park(
-                        self.listener.key,
+                        self.listener.notify.parking_key(),
                         || !self.is_notified() && std::time::Instant::now() < timeout, /* validate: should we actually park? */
                         || {},     // before_sleep: nothing to do
                         |_, _| {}, // timed_out
@@ -244,7 +243,7 @@ mod timeout {
                 }
 
                 if self.is_notified() {
-                    self.listener.notify.parked_count.fetch_sub(1, Ordering::Relaxed);
+                    self.listener.notify.sub_parkers(1, Ordering::Relaxed);
                     return Ok(());
                 }
 
