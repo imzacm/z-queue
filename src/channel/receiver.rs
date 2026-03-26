@@ -121,12 +121,12 @@ impl<C: Container> Receiver<C> {
     }
 
     #[cfg(feature = "stream")]
-    pub fn recv_stream(&self) -> super::RecvStream<C> {
+    pub fn to_stream(&self) -> super::RecvStream<C> {
         super::RecvStream::new(self.clone())
     }
 
     #[cfg(feature = "stream")]
-    pub fn into_recv_stream(self) -> super::RecvStream<C> {
+    pub fn into_stream(self) -> super::RecvStream<C> {
         super::RecvStream::new(self)
     }
 

@@ -22,7 +22,7 @@ fn bench_spsc(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             let capacity = NonZeroUsize::new(BOUND).unwrap();
             let (tx, rx) = z_bounded(capacity);
-            let mut stream = rx.into_recv_stream();
+            let mut stream = rx.into_stream();
 
             let producer = tokio::spawn(async move {
                 for i in 0..ITEMS {
@@ -59,7 +59,7 @@ fn bench_spsc(c: &mut Criterion) {
     group.bench_function("z_queue/unbounded", |b| {
         b.to_async(&rt).iter(|| async {
             let (tx, rx) = z_unbounded();
-            let mut stream = rx.into_recv_stream();
+            let mut stream = rx.into_stream();
 
             let producer = tokio::spawn(async move {
                 for i in 0..ITEMS {
@@ -107,7 +107,7 @@ fn bench_mpsc(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             let capacity = NonZeroUsize::new(BOUND).unwrap();
             let (tx, rx) = z_bounded(capacity);
-            let mut stream = rx.into_recv_stream();
+            let mut stream = rx.into_stream();
 
             for _ in 0..PRODUCERS {
                 let tx_clone = tx.clone();
@@ -150,7 +150,7 @@ fn bench_mpsc(c: &mut Criterion) {
     group.bench_function("z_queue/unbounded", |b| {
         b.to_async(&rt).iter(|| async {
             let (tx, rx) = z_unbounded();
-            let mut stream = rx.into_recv_stream();
+            let mut stream = rx.into_stream();
 
             for _ in 0..PRODUCERS {
                 let tx_clone = tx.clone();
@@ -217,7 +217,7 @@ fn bench_mpmc(c: &mut Criterion) {
 
             let mut consumer_handles = Vec::with_capacity(CONSUMERS);
             for _ in 0..CONSUMERS {
-                let mut stream = rx.recv_stream(); // Uses your internal Arc clone
+                let mut stream = rx.to_stream(); // Uses your internal Arc clone
                 consumer_handles.push(tokio::spawn(async move {
                     while let Some(msg) = stream.next().await {
                         std::hint::black_box(msg);
@@ -281,7 +281,7 @@ fn bench_mpmc(c: &mut Criterion) {
 
             let mut consumer_handles = Vec::with_capacity(CONSUMERS);
             for _ in 0..CONSUMERS {
-                let mut stream = rx.recv_stream();
+                let mut stream = rx.to_stream();
                 consumer_handles.push(tokio::spawn(async move {
                     while let Some(msg) = stream.next().await {
                         std::hint::black_box(msg);

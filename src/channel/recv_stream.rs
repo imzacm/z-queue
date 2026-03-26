@@ -87,7 +87,7 @@ mod tests {
     #[tokio::test]
     async fn test_recv_stream_lifecycle() {
         let (tx, rx) = unbounded();
-        let mut stream = rx.into_recv_stream();
+        let mut stream = rx.into_stream();
 
         // --- 1. Test the Fast Path ---
         // Push items before the stream even starts polling.
