@@ -2,6 +2,7 @@
 name = "z-queue"
 version = "0.1.0"
 edition = "2024"
+authors = ["Zac McChesney"]
 
 [[bench]]
 name = "queue"
@@ -12,7 +13,7 @@ name = "notify"
 harness = false
 
 [features]
-default = ["crossbeam-queue"]
+default = ["crossbeam-queue", "std"]
 
 # TODO: Remove std deps
 std = ["crossbeam-utils/std"]

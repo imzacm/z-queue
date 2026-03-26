@@ -8,6 +8,7 @@ extern crate alloc;
 
 mod channel;
 pub mod container;
+pub mod defaults;
 #[cfg(feature = "map")]
 mod map;
 pub mod notify;

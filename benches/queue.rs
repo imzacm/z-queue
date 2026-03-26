@@ -241,6 +241,7 @@ fn bench_unbounded_sync(c: &mut Criterion) {
         bench_sync_spsc!(&mut group, "std::sync::mpsc", std::sync::mpsc::channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "crossbeam_channel", crossbeam_channel::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "flume", flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        bench_sync_spsc!(&mut group, "z-queue default", z_queue::defaults::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_spsc!(
             &mut group,
@@ -266,6 +267,7 @@ fn bench_unbounded_sync(c: &mut Criterion) {
         bench_sync_mpsc!(&mut group, "std::sync::mpsc", std::sync::mpsc::channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "crossbeam_channel", crossbeam_channel::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "flume", flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        bench_sync_mpsc!(&mut group, "z-queue default", z_queue::defaults::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpsc!(
             &mut group,
@@ -291,6 +293,7 @@ fn bench_unbounded_sync(c: &mut Criterion) {
         // std::sync::mpsc omitted (SPSC/MPSC only)
         bench_sync_mpmc!(&mut group, "crossbeam_channel", crossbeam_channel::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpmc!(&mut group, "flume", flume::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        bench_sync_mpmc!(&mut group, "z-queue default", z_queue::defaults::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpmc!(
             &mut group,
@@ -322,6 +325,7 @@ fn bench_bounded_sync(c: &mut Criterion) {
         bench_sync_spsc!(&mut group, "std::sync::mpsc::sync_channel", std::sync::mpsc::sync_channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "crossbeam_channel", crossbeam_channel::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_spsc!(&mut group, "flume", flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        bench_sync_spsc!(&mut group, "z-queue default", z_queue::defaults::bounded(BOUND_NON_ZERO), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_spsc!(
             &mut group,
@@ -351,6 +355,7 @@ fn bench_bounded_sync(c: &mut Criterion) {
         bench_sync_mpsc!(&mut group, "std::sync::mpsc::sync_channel", std::sync::mpsc::sync_channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "crossbeam_channel", crossbeam_channel::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpsc!(&mut group, "flume", flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        bench_sync_mpsc!(&mut group, "z-queue default", z_queue::defaults::bounded(BOUND_NON_ZERO), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpsc!(
             &mut group,
@@ -379,6 +384,7 @@ fn bench_bounded_sync(c: &mut Criterion) {
         let mut group = c.benchmark_group("Bounded Sync MPMC");
         bench_sync_mpmc!(&mut group, "crossbeam_channel", crossbeam_channel::bounded(BOUND), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         bench_sync_mpmc!(&mut group, "flume", flume::bounded(BOUND), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
+        bench_sync_mpmc!(&mut group, "z-queue default", z_queue::defaults::bounded(BOUND_NON_ZERO), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_sync_mpmc!(
             &mut group,
@@ -414,6 +420,7 @@ fn bench_unbounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Unbounded Async SPSC");
         bench_async_spsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::unbounded_channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_spsc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        bench_async_spsc!(&mut group, "z-queue default", &rt, z_queue::defaults::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_spsc!(
             &mut group,
@@ -446,6 +453,7 @@ fn bench_unbounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Unbounded Async MPSC");
         bench_async_mpsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::unbounded_channel(), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_mpsc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        bench_async_mpsc!(&mut group, "z-queue default", &rt, z_queue::defaults::unbounded(), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpsc!(
             &mut group,
@@ -480,6 +488,7 @@ fn bench_unbounded_async(c: &mut Criterion) {
         // bench_async_mpmc!(&mut group, "flume", &rt, flume::unbounded(), |tx_base|
         // tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(),
         // |rx| rx.recv_async().await.unwrap());
+        bench_async_mpmc!(&mut group, "z-queue default", &rt, z_queue::defaults::unbounded(), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpmc!(
             &mut group,
@@ -519,6 +528,7 @@ fn bench_bounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Bounded Async SPSC");
         bench_async_spsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).await.unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_spsc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        bench_async_spsc!(&mut group, "z-queue default", &rt, z_queue::defaults::bounded(BOUND_NON_ZERO), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_spsc!(
             &mut group,
@@ -551,6 +561,7 @@ fn bench_bounded_async(c: &mut Criterion) {
         let mut group = c.benchmark_group("Bounded Async MPSC");
         bench_async_mpsc!(&mut group, "tokio::sync::mpsc", &rt, tokio::sync::mpsc::channel(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send(i).await.unwrap(), |rx| rx.recv().await.unwrap());
         bench_async_mpsc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
+        bench_async_mpsc!(&mut group, "z-queue default", &rt, z_queue::defaults::bounded(BOUND_NON_ZERO), |tx_base| tx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpsc!(
             &mut group,
@@ -585,6 +596,7 @@ fn bench_bounded_async(c: &mut Criterion) {
         // bench_async_mpmc!(&mut group, "flume", &rt, flume::bounded(BOUND), |tx_base|
         // tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(),
         // |rx| rx.recv_async().await.unwrap());
+        bench_async_mpmc!(&mut group, "z-queue default", &rt, z_queue::defaults::bounded(BOUND_NON_ZERO), |tx_base| tx_base.clone(), |rx_base| rx_base.clone(), (tx, i) => tx.send_async(i).await.unwrap(), |rx| rx.recv_async().await.unwrap());
         #[cfg(feature = "crossbeam-queue")]
         bench_zq_async_mpmc!(
             &mut group,

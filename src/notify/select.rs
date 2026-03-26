@@ -1,5 +1,5 @@
-use std::pin::Pin;
-use std::task::{Context, RawWaker, RawWakerVTable, Waker};
+use core::pin::Pin;
+use core::task::{Context, RawWaker, RawWakerVTable, Waker};
 
 use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN};
 
