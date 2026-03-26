@@ -12,7 +12,7 @@ use crate::container::Container;
 
 #[derive(Debug)]
 pub struct Receiver<C> {
-    state: Arc<State<C>>,
+    pub(super) state: Arc<State<C>>,
 }
 
 impl<C: Container> Clone for Receiver<C> {
@@ -118,6 +118,16 @@ impl<C: Container> Receiver<C> {
 
             listener.await;
         }
+    }
+
+    #[cfg(feature = "stream")]
+    pub fn recv_stream(&self) -> super::RecvStream<C> {
+        super::RecvStream::new(self.clone())
+    }
+
+    #[cfg(feature = "stream")]
+    pub fn into_recv_stream(self) -> super::RecvStream<C> {
+        super::RecvStream::new(self)
     }
 
     #[inline(always)]
