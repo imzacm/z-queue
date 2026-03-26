@@ -14,9 +14,7 @@ mod map;
 pub mod notify;
 mod queue;
 
-#[cfg(feature = "stream")]
-pub use self::channel::RecvStream;
-pub use self::channel::{Receiver, RecvError, SendError, Sender, bounded, unbounded};
+pub use self::channel::*;
 #[cfg(feature = "map")]
 pub use self::map::ZQueueMap;
 pub use self::queue::ZQueue;

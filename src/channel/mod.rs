@@ -2,6 +2,7 @@ mod receiver;
 mod recv_iter;
 #[cfg(feature = "stream")]
 mod recv_stream;
+mod recv_try_iter;
 mod sender;
 
 #[cfg(not(feature = "triomphe"))]
@@ -17,6 +18,7 @@ pub use self::receiver::Receiver;
 pub use self::recv_iter::RecvIter;
 #[cfg(feature = "stream")]
 pub use self::recv_stream::RecvStream;
+pub use self::recv_try_iter::RecvTryIter;
 pub use self::sender::Sender;
 use crate::ZQueue;
 use crate::container::{Container, CreateBounded, CreateUnbounded};

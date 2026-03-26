@@ -27,7 +27,8 @@ pub fn select_blocking(listeners: &mut [NotifyListener<'_>]) -> Option<usize> {
         }
     }
 
-    // Key is the address of the `listeners` variable (not the slice), which is unique to this scope.
+    // Key is the address of the `listeners` variable (not the slice), which is unique to this
+    // scope.
     let key = core::ptr::from_ref(&listeners) as usize;
     let waker = create_waker(key);
     let mut cx = Context::from_waker(&waker);

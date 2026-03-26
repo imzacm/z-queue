@@ -124,6 +124,14 @@ impl<C: Container> Receiver<C> {
         super::RecvIter::new(self.clone())
     }
 
+    pub fn try_iter(&self) -> super::RecvTryIter<C> {
+        super::RecvTryIter::new(self.clone())
+    }
+
+    pub fn into_try_iter(self) -> super::RecvTryIter<C> {
+        super::RecvTryIter::new(self)
+    }
+
     #[cfg(feature = "stream")]
     pub fn to_stream(&self) -> super::RecvStream<C> {
         super::RecvStream::new(self.clone())
