@@ -12,11 +12,17 @@ harness = false
 name = "notify"
 harness = false
 
+[[bench]]
+name = "recv_stream"
+harness = false
+
 [features]
 default = ["crossbeam-queue", "std"]
 
 # TODO: Remove std deps
 std = ["crossbeam-utils/std"]
+
+stream = ["dep:futures-util", "dep:ouroboros"]
 
 crossbeam-queue = ["dep:crossbeam-queue"]
 segmented-array = ["dep:arrayvec"]
@@ -31,6 +37,10 @@ triomphe = ["dep:triomphe"]
 parking_lot = "0.12"
 parking_lot_core = "0.9"
 crossbeam-utils = { version = "0.8", default-features = false }
+
+# Stream
+futures-util = { version = "0.3", optional = true }
+ouroboros = { version = "0.18", optional = true }
 
 # Crossbeam Queue
 crossbeam-queue = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }

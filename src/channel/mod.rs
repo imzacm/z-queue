@@ -1,4 +1,6 @@
 mod receiver;
+#[cfg(feature = "stream")]
+mod recv_stream;
 mod sender;
 
 #[cfg(not(feature = "triomphe"))]
@@ -11,6 +13,8 @@ use crossbeam_utils::CachePadded;
 use triomphe::Arc;
 
 pub use self::receiver::Receiver;
+#[cfg(feature = "stream")]
+pub use self::recv_stream::RecvStream;
 pub use self::sender::Sender;
 use crate::ZQueue;
 use crate::container::{Container, CreateBounded, CreateUnbounded};

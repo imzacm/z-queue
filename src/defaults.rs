@@ -29,6 +29,15 @@ pub type BoundedReceiver<T> = Receiver<VecDeque<T>>;
 pub type UnboundedSender<T> = Sender<VecDeque<T>>;
 pub type UnboundedReceiver<T> = Receiver<VecDeque<T>>;
 
+#[cfg(all(feature = "stream", feature = "crossbeam-queue"))]
+pub type BoundedRecvStream<T> = crate::RecvStream<CrossbeamArrayQueue<T>>;
+
+#[cfg(all(feature = "stream", not(feature = "crossbeam-queue")))]
+pub type BoundedRecvStream<T> = crate::RecvStream<VecDeque<T>>;
+
+#[cfg(feature = "stream")]
+pub type UnboundedRecvStream<T> = crate::RecvStream<VecDeque<T>>;
+
 pub fn bounded<T>(capacity: NonZeroUsize) -> (BoundedSender<T>, BoundedReceiver<T>) {
     crate::bounded(capacity)
 }
