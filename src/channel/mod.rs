@@ -1,4 +1,5 @@
 mod receiver;
+mod recv_iter;
 #[cfg(feature = "stream")]
 mod recv_stream;
 mod sender;
@@ -13,6 +14,7 @@ use crossbeam_utils::CachePadded;
 use triomphe::Arc;
 
 pub use self::receiver::Receiver;
+pub use self::recv_iter::RecvIter;
 #[cfg(feature = "stream")]
 pub use self::recv_stream::RecvStream;
 pub use self::sender::Sender;

@@ -4,6 +4,8 @@ use core::task::{Context, Poll};
 
 use parking_lot_core::DEFAULT_PARK_TOKEN;
 
+#[cfg(feature = "std")]
+pub use self::timeout::NotifyTimeoutListener;
 use super::Notify;
 use super::waker_queue::WakerTicket;
 
@@ -38,6 +40,11 @@ impl<'a> NotifyListener<'a> {
     #[inline(always)]
     pub fn is_notified(&self) -> bool {
         self.notify.epoch.load(Ordering::Acquire) != self.epoch
+    }
+
+    #[cfg(feature = "std")]
+    pub fn with_timeout(self, timeout: std::time::Duration) -> NotifyTimeoutListener<'a> {
+        NotifyTimeoutListener::new(self, timeout)
     }
 
     /// Blocks the current thread until a notification arrives.
@@ -143,6 +150,106 @@ impl<'a> Drop for NotifyListener<'a> {
             && self.notify.async_wakers.lock().remove(ticket)
         {
             self.notify.async_count.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+mod timeout {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct NotifyTimeoutListener<'a> {
+        listener: NotifyListener<'a>,
+        timeout: Duration,
+    }
+
+    impl<'a> NotifyTimeoutListener<'a> {
+        pub(super) fn new(listener: NotifyListener<'a>, timeout: Duration) -> Self {
+            Self { listener, timeout }
+        }
+
+        #[inline(always)]
+        pub fn notification(&self) -> &'a Notify {
+            self.listener.notification()
+        }
+
+        #[inline(always)]
+        pub fn is_notification(&self, notify: &Notify) -> bool {
+            self.listener.is_notification(notify)
+        }
+
+        /// Returns `true` if a notification has occurred since this listener was created.
+        #[inline(always)]
+        pub fn is_notified(&self) -> bool {
+            self.listener.is_notified()
+        }
+
+        #[inline(always)]
+        pub fn timeout(&self) -> Duration {
+            self.timeout
+        }
+
+        #[inline(always)]
+        pub fn set_timeout(&mut self, timeout: Duration) -> &mut Self {
+            self.timeout = timeout;
+            self
+        }
+
+        #[inline(always)]
+        pub fn with_timeout(mut self, timeout: Duration) -> Self {
+            self.timeout = timeout;
+            self
+        }
+
+        pub fn wait(self) -> Result<(), Self> {
+            let timeout = std::time::Instant::now() + self.timeout;
+
+            if self.is_notified() {
+                return Ok(());
+            }
+
+            for _ in 0..64 {
+                if std::time::Instant::now() >= timeout {
+                    return Err(self);
+                }
+
+                if self.is_notified() {
+                    return Ok(());
+                }
+                core::hint::spin_loop();
+            }
+
+            self.listener.notify.parked_count.fetch_add(1, Ordering::SeqCst);
+
+            loop {
+                if std::time::Instant::now() >= timeout {
+                    return Err(self);
+                }
+
+                // SAFETY: We use the epoch address as a stable key.
+                // The validate closure re-checks under the parking_lot_core's
+                // internal lock, preventing missed wakeups.
+                unsafe {
+                    parking_lot_core::park(
+                        self.listener.key,
+                        || !self.is_notified() && std::time::Instant::now() < timeout, /* validate: should we actually park? */
+                        || {},     // before_sleep: nothing to do
+                        |_, _| {}, // timed_out
+                        DEFAULT_PARK_TOKEN,
+                        Some(timeout),
+                    );
+                }
+
+                if self.is_notified() {
+                    self.listener.notify.parked_count.fetch_sub(1, Ordering::Relaxed);
+                    return Ok(());
+                }
+
+                // Spurious wakeup — loop back and park again.
+            }
         }
     }
 }

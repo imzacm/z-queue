@@ -120,6 +120,10 @@ impl<C: Container> Receiver<C> {
         }
     }
 
+    pub fn iter(&self) -> super::RecvIter<C> {
+        super::RecvIter::new(self.clone())
+    }
+
     #[cfg(feature = "stream")]
     pub fn to_stream(&self) -> super::RecvStream<C> {
         super::RecvStream::new(self.clone())
@@ -256,5 +260,14 @@ impl<C> Drop for Receiver<C> {
     fn drop(&mut self) {
         self.state.receiver_count.fetch_sub(1, Ordering::Release);
         self.state.queue.pop_event.notify(usize::MAX);
+    }
+}
+
+impl<C: Container> IntoIterator for Receiver<C> {
+    type Item = C::Item;
+    type IntoIter = super::RecvIter<C>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        super::RecvIter::new(self)
     }
 }
