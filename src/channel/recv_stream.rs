@@ -2,10 +2,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_util::Stream;
+use z_sync::notify::NotifyListener;
 
 use super::{Receiver, RecvError};
 use crate::container::Container;
-use crate::notify::NotifyListener;
 
 #[ouroboros::self_referencing]
 #[derive(Debug)]

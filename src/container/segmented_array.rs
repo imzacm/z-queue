@@ -5,13 +5,13 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use arrayvec::ArrayVec;
 use crossbeam_utils::CachePadded;
-use parking_lot::Mutex;
+use z_sync::Lock;
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct SegmentedArray<T, const SEGMENT_SIZE: usize> {
-    queue: CachePadded<Mutex<VecDeque<ArrayVec<T, SEGMENT_SIZE>>>>,
+    queue: Lock<VecDeque<ArrayVec<T, SEGMENT_SIZE>>>,
     len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
@@ -22,7 +22,7 @@ impl<T, const SEGMENT_SIZE: usize> CreateBounded for SegmentedArray<T, SEGMENT_S
         let mut queue = VecDeque::with_capacity(block_capacity);
         queue.push_back(ArrayVec::new());
         Self {
-            queue: CachePadded::new(Mutex::new(queue)),
+            queue: Lock::new(queue),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
@@ -34,7 +34,7 @@ impl<T, const SEGMENT_SIZE: usize> CreateUnbounded for SegmentedArray<T, SEGMENT
         let mut queue = VecDeque::new();
         queue.push_back(ArrayVec::new());
         Self {
-            queue: CachePadded::new(Mutex::new(queue)),
+            queue: Lock::new(queue),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }
@@ -56,7 +56,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
 
     #[inline(always)]
     fn clear(&self) -> usize {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         lock.clear();
         lock.push_back(ArrayVec::new());
         self.len.swap(0, Ordering::Release)
@@ -67,7 +67,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
             return Err(item);
         }
 
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         let back = lock.back_mut().expect("Queue always has at least one block");
 
         if back.is_full() {
@@ -85,7 +85,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     }
 
     fn pop(&self) -> Option<T> {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         loop {
             let front = lock.front_mut().expect("Queue always has at least one block");
 
@@ -106,7 +106,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     where
         F: FnMut(&T) -> bool,
     {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
 
         let mut item = None;
         let mut remove_block_index = None;
@@ -140,7 +140,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     where
         F: FnMut(&T) -> bool,
     {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
 
         let mut removed = 0;
 
@@ -167,7 +167,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     where
         F: FnMut(&T) -> bool,
     {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
 
         let old_len = removed.len();
         lock.retain_mut(|block| {
@@ -188,7 +188,7 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     where
         F: FnMut(&Self::Item),
     {
-        let lock = self.queue.lock();
+        let lock = self.queue.write();
         for block in lock.iter() {
             for item in block.iter() {
                 visit_fn(item);
@@ -200,16 +200,16 @@ impl<T, const SEGMENT_SIZE: usize> Container for SegmentedArray<T, SEGMENT_SIZE>
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;
 
-        self.queue.lock().make_contiguous().shuffle(rng);
-        for block in self.queue.lock().iter_mut() {
+        self.queue.write().make_contiguous().shuffle(rng);
+        for block in self.queue.write().iter_mut() {
             block.shuffle(rng);
         }
     }
 
     #[cfg(feature = "fastrand")]
     fn fastrand_shuffle(&self) {
-        fastrand::shuffle(self.queue.lock().make_contiguous());
-        for block in self.queue.lock().iter_mut() {
+        fastrand::shuffle(self.queue.write().make_contiguous());
+        for block in self.queue.write().iter_mut() {
             fastrand::shuffle(block);
         }
     }

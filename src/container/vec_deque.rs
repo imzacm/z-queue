@@ -4,13 +4,13 @@ use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
-use parking_lot::Mutex;
+use z_sync::Lock;
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct VecDeque<T> {
-    queue: CachePadded<Mutex<RawVecDeque<T>>>,
+    queue: Lock<RawVecDeque<T>>,
     len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
@@ -19,7 +19,7 @@ impl<T> CreateBounded for VecDeque<T> {
     fn new_bounded(capacity: NonZeroUsize) -> Self {
         let cap = capacity.get();
         Self {
-            queue: CachePadded::new(Mutex::new(RawVecDeque::with_capacity(cap))),
+            queue: Lock::new(RawVecDeque::with_capacity(cap)),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
@@ -29,7 +29,7 @@ impl<T> CreateBounded for VecDeque<T> {
 impl<T> CreateUnbounded for VecDeque<T> {
     fn new_unbounded() -> Self {
         Self {
-            queue: CachePadded::new(Mutex::new(RawVecDeque::new())),
+            queue: Lock::new(RawVecDeque::new()),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }
@@ -51,7 +51,7 @@ impl<T> Container for VecDeque<T> {
 
     #[inline(always)]
     fn clear(&self) -> usize {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         lock.clear();
         self.len.swap(0, Ordering::Release)
     }
@@ -62,7 +62,7 @@ impl<T> Container for VecDeque<T> {
             return Err(item);
         }
 
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         lock.push_back(item);
         self.len.fetch_add(1, Ordering::Release);
         Ok(())
@@ -70,7 +70,7 @@ impl<T> Container for VecDeque<T> {
 
     #[inline(always)]
     fn pop(&self) -> Option<T> {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         let item = lock.pop_front();
         if item.is_some() {
             self.len.fetch_sub(1, Ordering::Release);
@@ -82,7 +82,7 @@ impl<T> Container for VecDeque<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         let index = lock.iter().position(find_fn)?;
         let item = lock.remove(index)?;
         self.len.fetch_sub(1, Ordering::Release);
@@ -93,7 +93,7 @@ impl<T> Container for VecDeque<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         let old_len = lock.len();
         lock.retain(retain_fn);
         let new_len = lock.len();
@@ -106,7 +106,7 @@ impl<T> Container for VecDeque<T> {
     where
         F: FnMut(&T) -> bool,
     {
-        let mut lock = self.queue.lock();
+        let mut lock = self.queue.write();
         vec_deque_retain_into(&mut lock, removed, retain_fn);
         self.len.store(lock.len(), Ordering::Release);
     }
@@ -116,7 +116,7 @@ impl<T> Container for VecDeque<T> {
     where
         F: FnMut(&Self::Item),
     {
-        let lock = self.queue.lock();
+        let lock = self.queue.read();
         for item in lock.iter() {
             visit_fn(item);
         }
@@ -126,12 +126,12 @@ impl<T> Container for VecDeque<T> {
     fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         use rand::seq::SliceRandom;
 
-        self.queue.lock().make_contiguous().shuffle(rng);
+        self.queue.write().make_contiguous().shuffle(rng);
     }
 
     #[cfg(feature = "fastrand")]
     fn fastrand_shuffle(&self) {
-        fastrand::shuffle(self.queue.lock().make_contiguous());
+        fastrand::shuffle(self.queue.write().make_contiguous());
     }
 }
 
