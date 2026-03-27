@@ -11,7 +11,6 @@ pub mod container;
 pub mod defaults;
 #[cfg(feature = "map")]
 mod map;
-pub mod notify;
 mod queue;
 
 pub use self::channel::*;

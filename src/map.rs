@@ -9,10 +9,10 @@ use arc_swap::ArcSwapAny;
 use crossbeam_utils::CachePadded;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
+use z_sync::Notify;
 
 use crate::ZQueue;
 use crate::container::{Container, CreateBounded, CreateUnbounded};
-use crate::notify::Notify;
 
 // Use triomphe if enabled.
 type ArcSwap<T> = ArcSwapAny<Arc<T>>;

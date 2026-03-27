@@ -3,9 +3,9 @@ use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
+use z_sync::Notify;
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
-use crate::notify::Notify;
 
 pub const MAX_SMALL_CAPACITY: usize = 1024;
 
