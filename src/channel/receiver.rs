@@ -64,10 +64,13 @@ impl<C: Container> Receiver<C> {
 
     #[inline(always)]
     pub fn try_recv(&self) -> Result<Option<C::Item>, RecvError> {
+        if let Some(item) = self.state.queue.try_pop() {
+            return Ok(Some(item));
+        }
         if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
-        Ok(self.state.queue.try_pop())
+        Ok(None)
     }
 
     pub fn recv(&self) -> Result<C::Item, RecvError> {
@@ -147,10 +150,13 @@ impl<C: Container> Receiver<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
+        if let Some(item) = self.state.queue.try_find(find_fn) {
+            return Ok(Some(item));
+        }
         if self.is_disconnected() {
             return Err(RecvError::Disconnected);
         }
-        Ok(self.state.queue.try_find(find_fn))
+        Ok(None)
     }
 
     pub fn find<F>(&self, mut find_fn: F) -> Result<C::Item, RecvError>
