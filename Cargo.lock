@@ -1274,7 +1274,7 @@ dependencies = [
 [[package]]
 name = "z-sync"
 version = "0.1.0"
-source = "git+https://github.com/imzacm/z-sync.git?rev=9e6d2b8668ae4f25a9e0b3eaccd2646d806bd865#9e6d2b8668ae4f25a9e0b3eaccd2646d806bd865"
+source = "git+https://github.com/imzacm/z-sync.git?rev=1e441255526f6bcc3cecd2d97a2ffb246a795859#1e441255526f6bcc3cecd2d97a2ffb246a795859"
 dependencies = [
  "crossbeam-utils",
  "parking_lot_core",
