@@ -140,7 +140,9 @@ impl<C: Container> Sender<C> {
 
 impl<C> Drop for Sender<C> {
     fn drop(&mut self) {
-        self.state.sender_count.fetch_sub(1, Ordering::Release);
-        self.state.queue.push_event.notify(usize::MAX);
+        // Wake all receivers if this is the last sender.
+        if self.state.sender_count.fetch_sub(1, Ordering::Release) == 1 {
+            self.state.queue.push_event.notify(usize::MAX);
+        }
     }
 }

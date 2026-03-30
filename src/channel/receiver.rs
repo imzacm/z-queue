@@ -68,6 +68,9 @@ impl<C: Container> Receiver<C> {
             return Ok(Some(item));
         }
         if self.is_disconnected() {
+            if let Some(item) = self.state.queue.try_pop() {
+                return Ok(Some(item));
+            }
             return Err(RecvError::Disconnected);
         }
         Ok(None)
@@ -146,14 +149,17 @@ impl<C: Container> Receiver<C> {
     }
 
     #[inline(always)]
-    pub fn try_find<F>(&self, find_fn: F) -> Result<Option<C::Item>, RecvError>
+    pub fn try_find<F>(&self, mut find_fn: F) -> Result<Option<C::Item>, RecvError>
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if let Some(item) = self.state.queue.try_find(find_fn) {
+        if let Some(item) = self.state.queue.try_find(&mut find_fn) {
             return Ok(Some(item));
         }
         if self.is_disconnected() {
+            if let Some(item) = self.state.queue.try_find(find_fn) {
+                return Ok(Some(item));
+            }
             return Err(RecvError::Disconnected);
         }
         Ok(None)
@@ -216,64 +222,46 @@ impl<C: Container> Receiver<C> {
     }
 
     #[inline(always)]
-    pub fn retain<F>(&self, retain_fn: F) -> Result<(), RecvError>
+    pub fn retain<F>(&self, retain_fn: F)
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if self.is_disconnected() {
-            return Err(RecvError::Disconnected);
-        }
         self.state.queue.retain(retain_fn);
-        Ok(())
     }
 
     #[inline(always)]
-    pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<C::Item>) -> Result<(), RecvError>
+    pub fn retain_into<F>(&self, retain_fn: F, into: &mut Vec<C::Item>)
     where
         F: FnMut(&C::Item) -> bool,
     {
-        if self.is_disconnected() {
-            return Err(RecvError::Disconnected);
-        }
         self.state.queue.retain_into(retain_fn, into);
-        Ok(())
     }
 
     #[inline(always)]
-    pub fn visit<F>(&self, visit_fn: F) -> Result<(), RecvError>
+    pub fn visit<F>(&self, visit_fn: F)
     where
         F: FnMut(&C::Item),
     {
-        if self.is_disconnected() {
-            return Err(RecvError::Disconnected);
-        }
         self.state.queue.visit(visit_fn);
-        Ok(())
     }
 
     #[cfg(feature = "rand")]
-    pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) -> Result<(), RecvError> {
-        if self.is_disconnected() {
-            return Err(RecvError::Disconnected);
-        }
+    pub fn rand_shuffle<R: rand::Rng>(&self, rng: &mut R) {
         self.state.queue.rand_shuffle(rng);
-        Ok(())
     }
 
     #[cfg(feature = "fastrand")]
-    pub fn fastrand_shuffle(&self) -> Result<(), RecvError> {
-        if self.is_disconnected() {
-            return Err(RecvError::Disconnected);
-        }
+    pub fn fastrand_shuffle(&self) {
         self.state.queue.fastrand_shuffle();
-        Ok(())
     }
 }
 
 impl<C> Drop for Receiver<C> {
     fn drop(&mut self) {
-        self.state.receiver_count.fetch_sub(1, Ordering::Release);
-        self.state.queue.pop_event.notify(usize::MAX);
+        // Wake all senders if this is the last receiver.
+        if self.state.receiver_count.fetch_sub(1, Ordering::Release) == 1 {
+            self.state.queue.pop_event.notify(usize::MAX);
+        }
     }
 }
 

@@ -13,7 +13,7 @@ name = "recv_stream"
 harness = false
 
 [features]
-default = ["crossbeam-queue", "std"]
+default = ["crossbeam-queue", "std", "thin-vec"]
 
 # TODO: Remove std deps
 std = ["crossbeam-utils/std", "z-sync/std"]
@@ -31,7 +31,7 @@ triomphe = ["dep:triomphe"]
 thin-vec = ["z-sync/thin-vec"]
 
 [dependencies]
-z-sync = { git = "https://github.com/imzacm/z-sync.git", rev = "6795d07e38b291705e3ff8ebd044d545530e3b15", default-features = false }
+z-sync = { git = "https://github.com/imzacm/z-sync.git", rev = "87f4285d7a335d2862afff9297efb27a74358431", default-features = false }
 
 crossbeam-utils = { version = "0.8", default-features = false }
 
