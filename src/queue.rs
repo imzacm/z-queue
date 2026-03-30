@@ -9,15 +9,30 @@ use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 pub const MAX_SMALL_CAPACITY: usize = 1024;
 
+/// Ensure find_waiters and push_event are on the same cache line.
+#[derive(Debug)]
+pub(crate) struct PushEvent {
+    find_waiters: AtomicUsize,
+    push_event: Notify,
+}
+
+impl std::ops::Deref for PushEvent {
+    type Target = Notify;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.push_event
+    }
+}
+
 #[derive(Debug)]
 pub struct ZQueue<C> {
     pub(crate) container: C,
     pub(crate) has_capacity: bool,
-    find_waiters: CachePadded<AtomicUsize>,
     // Notified on push.
-    pub(crate) push_event: Notify,
+    pub(crate) push_event: CachePadded<PushEvent>,
     // Notified on pop.
-    pub(crate) pop_event: Notify,
+    pub(crate) pop_event: CachePadded<Notify>,
 }
 
 impl<C: Container> ZQueue<C> {
@@ -26,9 +41,11 @@ impl<C: Container> ZQueue<C> {
         Self {
             container,
             has_capacity,
-            find_waiters: CachePadded::new(AtomicUsize::new(0)),
-            push_event: Notify::new(),
-            pop_event: Notify::new(),
+            push_event: CachePadded::new(PushEvent {
+                find_waiters: AtomicUsize::new(0),
+                push_event: Notify::new(),
+            }),
+            pop_event: CachePadded::new(Notify::new()),
         }
     }
 
@@ -80,7 +97,7 @@ impl<C: Container> ZQueue<C> {
     pub fn try_push(&self, item: C::Item) -> Result<(), C::Item> {
         self.container.push(item)?;
 
-        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
+        let find_waiters = self.push_event.find_waiters.load(Ordering::Relaxed);
         self.push_event.notify(find_waiters + 1);
         Ok(())
     }
@@ -211,10 +228,10 @@ impl<C: Container> ZQueue<C> {
         }
 
         let backoff = crossbeam_utils::Backoff::new();
-        self.find_waiters.fetch_add(1, Ordering::Release);
+        self.push_event.find_waiters.fetch_add(1, Ordering::Release);
         loop {
             if let Some(item) = self.try_find(&mut find_fn) {
-                self.find_waiters.fetch_sub(1, Ordering::Relaxed);
+                self.push_event.find_waiters.fetch_sub(1, Ordering::Relaxed);
                 return item;
             }
 
@@ -225,7 +242,7 @@ impl<C: Container> ZQueue<C> {
 
             let listener = self.push_event.listener();
             if let Some(item) = self.try_find(&mut find_fn) {
-                self.find_waiters.fetch_sub(1, Ordering::Release);
+                self.push_event.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
             }
 
@@ -237,16 +254,16 @@ impl<C: Container> ZQueue<C> {
     where
         F: FnMut(&C::Item) -> bool,
     {
-        self.find_waiters.fetch_add(1, Ordering::Release);
+        self.push_event.find_waiters.fetch_add(1, Ordering::Release);
         loop {
             if let Some(item) = self.try_find(&mut find_fn) {
-                self.find_waiters.fetch_sub(1, Ordering::Relaxed);
+                self.push_event.find_waiters.fetch_sub(1, Ordering::Relaxed);
                 return item;
             }
 
             let listener = self.push_event.listener();
             if let Some(item) = self.try_find(&mut find_fn) {
-                self.find_waiters.fetch_sub(1, Ordering::Release);
+                self.push_event.find_waiters.fetch_sub(1, Ordering::Release);
                 return item;
             }
 
