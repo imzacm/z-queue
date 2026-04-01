@@ -123,6 +123,16 @@ where
         });
     }
 
+    fn remove_key(&self, key: &K) {
+        self.keys.rcu(|keys| {
+            let mut keys = Vec::clone(keys);
+            if let Some(index) = keys.iter().position(|k| k == key) {
+                keys.swap_remove(index);
+            }
+            keys
+        });
+    }
+
     fn rotate_keys(&self) {
         self.keys.rcu(|keys| {
             let mut keys = Vec::clone(keys);
@@ -287,12 +297,20 @@ where
                 continue;
             }
 
-            let Some(queue) = self.queues.get_sync(key) else { continue };
-            if let Some(item) = queue.try_pop() {
+            let (item, is_empty) = {
+                let Some(queue) = self.queues.get_sync(key) else { continue };
+                let Some(item) = queue.try_pop() else { continue };
+                (item, queue.is_empty())
+            };
+
+            if is_empty && self.queues.remove_if_sync(key, |queue| queue.is_empty()).is_some() {
+                self.remove_key(key);
+            } else {
                 self.rotate_keys();
-                self.pop_observe_event.notify(usize::MAX);
-                return Some((key.clone(), item));
             }
+
+            self.pop_observe_event.notify(usize::MAX);
+            return Some((key.clone(), item));
         }
 
         None
@@ -308,12 +326,22 @@ where
                 continue;
             }
 
-            let Some(queue) = self.queues.get_async(key).await else { continue };
-            if let Some(item) = queue.try_pop() {
-                self.pop_observe_event.notify(usize::MAX);
+            let (item, is_empty) = {
+                let Some(queue) = self.queues.get_async(key).await else { continue };
+                let Some(item) = queue.try_pop() else { continue };
+                (item, queue.is_empty())
+            };
+
+            if is_empty
+                && self.queues.remove_if_async(key, |queue| queue.is_empty()).await.is_some()
+            {
+                self.remove_key(key);
+            } else {
                 self.rotate_keys();
-                return Some((key.clone(), item));
             }
+
+            self.pop_observe_event.notify(usize::MAX);
+            return Some((key.clone(), item));
         }
 
         None
@@ -376,12 +404,20 @@ where
                 continue;
             }
 
-            let Some(queue) = self.queues.get_sync(key) else { continue };
-            if let Some(item) = queue.try_find(&mut find_fn) {
-                self.pop_observe_event.notify(usize::MAX);
+            let (item, is_empty) = {
+                let Some(queue) = self.queues.get_sync(key) else { continue };
+                let Some(item) = queue.try_find(&mut find_fn) else { continue };
+                (item, queue.is_empty())
+            };
+
+            if is_empty && self.queues.remove_if_sync(key, |queue| queue.is_empty()).is_some() {
+                self.remove_key(key);
+            } else {
                 self.rotate_keys();
-                return Some((key.clone(), item));
             }
+
+            self.pop_observe_event.notify(usize::MAX);
+            return Some((key.clone(), item));
         }
 
         None
@@ -402,12 +438,22 @@ where
                 continue;
             }
 
-            let Some(queue) = self.queues.get_async(key).await else { continue };
-            if let Some(item) = queue.try_find(&mut find_fn) {
-                self.pop_observe_event.notify(usize::MAX);
+            let (item, is_empty) = {
+                let Some(queue) = self.queues.get_async(key).await else { continue };
+                let Some(item) = queue.try_find(&mut find_fn) else { continue };
+                (item, queue.is_empty())
+            };
+
+            if is_empty
+                && self.queues.remove_if_async(key, |queue| queue.is_empty()).await.is_some()
+            {
+                self.remove_key(key);
+            } else {
                 self.rotate_keys();
-                return Some((key.clone(), item));
             }
+
+            self.pop_observe_event.notify(usize::MAX);
+            return Some((key.clone(), item));
         }
 
         None
@@ -478,6 +524,12 @@ where
                 && let Some(queue) = self.queues.get_sync(key).map(|q| q.clone())
             {
                 queue.retain(&mut retain_fn);
+
+                if queue.is_empty()
+                    && self.queues.remove_if_sync(key, |queue| queue.is_empty()).is_some()
+                {
+                    self.remove_key(key);
+                }
             }
         }
     }
@@ -493,6 +545,12 @@ where
                 && let Some(queue) = self.queues.get_async(key).await.map(|q| q.clone())
             {
                 queue.retain(&mut retain_fn);
+
+                if queue.is_empty()
+                    && self.queues.remove_if_async(key, |queue| queue.is_empty()).await.is_some()
+                {
+                    self.remove_key(key);
+                }
             }
         }
     }
@@ -508,6 +566,12 @@ where
                 && let Some(queue) = self.queues.get_sync(key).map(|q| q.clone())
             {
                 queue.retain_into(&mut retain_fn, into);
+
+                if queue.is_empty()
+                    && self.queues.remove_if_sync(key, |queue| queue.is_empty()).is_some()
+                {
+                    self.remove_key(key);
+                }
             }
         }
     }
@@ -527,6 +591,12 @@ where
                 && let Some(queue) = self.queues.get_async(key).await.map(|q| q.clone())
             {
                 queue.retain_into(&mut retain_fn, into);
+
+                if queue.is_empty()
+                    && self.queues.remove_if_async(key, |queue| queue.is_empty()).await.is_some()
+                {
+                    self.remove_key(key);
+                }
             }
         }
     }
