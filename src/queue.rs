@@ -1,9 +1,9 @@
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
 
 use crossbeam_utils::CachePadded;
-use z_sync::Notify;
+use z_sync::{Notify, NotifyState, NotifyStateU64};
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
 
@@ -11,41 +11,96 @@ pub const MAX_SMALL_CAPACITY: usize = 1024;
 
 /// Ensure find_waiters and push_event are on the same cache line.
 #[derive(Debug)]
-pub(crate) struct PushEvent {
-    find_waiters: AtomicUsize,
-    push_event: Notify,
+pub(crate) struct PushEvent<PS: NotifyState, OS: NotifyState> {
+    push_event: Notify<PS>,
+    observe_event: Notify<OS>,
+    pub find_waiters: AtomicU16,
 }
 
-impl std::ops::Deref for PushEvent {
-    type Target = Notify;
+impl<PS: NotifyState, OS: NotifyState> PushEvent<PS, OS> {
+    pub fn new() -> Self {
+        Self {
+            push_event: Notify::new(),
+            observe_event: Notify::new(),
+            find_waiters: AtomicU16::new(0),
+        }
+    }
 
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.push_event
+    pub fn notify(&self, count: usize) {
+        let find_waiters = self.find_waiters.load(Ordering::Relaxed) as usize;
+        self.push_event.notify(find_waiters + count);
+
+        self.observe_event.notify(usize::MAX);
+    }
+
+    #[inline(always)]
+    pub fn listener(&self) -> z_sync::notify::NotifyListener<'_, PS> {
+        self.push_event.listener()
+    }
+
+    #[inline(always)]
+    pub(crate) fn observe(&self) -> z_sync::notify::NotifyListener<'_, OS> {
+        self.observe_event.listener()
     }
 }
 
 #[derive(Debug)]
-pub struct ZQueue<C> {
+pub(crate) struct PopEvent<PS: NotifyState, OS: NotifyState> {
+    pop_event: Notify<PS>,
+    observe_event: Notify<OS>,
+}
+
+impl<PS: NotifyState, OS: NotifyState> PopEvent<PS, OS> {
+    pub fn new() -> Self {
+        Self { pop_event: Notify::new(), observe_event: Notify::new() }
+    }
+
+    #[inline(always)]
+    pub fn notify(&self, count: usize) {
+        self.pop_event.notify(count);
+        self.observe_event.notify(usize::MAX);
+    }
+
+    #[inline(always)]
+    pub fn listener(&self) -> z_sync::notify::NotifyListener<'_, PS> {
+        self.pop_event.listener()
+    }
+
+    #[inline(always)]
+    pub fn observe(&self) -> z_sync::notify::NotifyListener<'_, OS> {
+        self.observe_event.listener()
+    }
+}
+
+#[derive(Debug)]
+pub struct ZQueue<C, PushS = NotifyStateU64, PopS = NotifyStateU64, OS = NotifyStateU64>
+where
+    PushS: NotifyState,
+    PopS: NotifyState,
+    OS: NotifyState,
+{
     pub(crate) container: C,
     pub(crate) has_capacity: bool,
     // Notified on push.
-    pub(crate) push_event: CachePadded<PushEvent>,
+    pub(crate) push_event: CachePadded<PushEvent<PushS, OS>>,
     // Notified on pop.
-    pub(crate) pop_event: CachePadded<Notify>,
+    pub(crate) pop_event: CachePadded<PopEvent<PopS, OS>>,
 }
 
-impl<C: Container> ZQueue<C> {
+impl<C: Container, PushS, PopS, OS> ZQueue<C, PushS, PopS, OS>
+where
+    PushS: NotifyState,
+    PopS: NotifyState,
+    OS: NotifyState,
+{
     pub fn new(container: C) -> Self {
         let has_capacity = container.capacity().is_some();
         Self {
             container,
             has_capacity,
-            push_event: CachePadded::new(PushEvent {
-                find_waiters: AtomicUsize::new(0),
-                push_event: Notify::new(),
-            }),
-            pop_event: CachePadded::new(Notify::new()),
+            push_event: CachePadded::new(PushEvent::new()),
+            pop_event: CachePadded::new(PopEvent::new()),
         }
     }
 
@@ -64,7 +119,12 @@ impl<C: Container> ZQueue<C> {
     }
 }
 
-impl<C: Container> ZQueue<C> {
+impl<C: Container, PushS, PopS, OS> ZQueue<C, PushS, PopS, OS>
+where
+    PushS: NotifyState,
+    PopS: NotifyState,
+    OS: NotifyState,
+{
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.container.len()
@@ -94,11 +154,19 @@ impl<C: Container> ZQueue<C> {
     }
 
     #[inline(always)]
+    pub fn observe_push(&self) -> z_sync::notify::NotifyListener<'_, OS> {
+        self.push_event.observe()
+    }
+
+    #[inline(always)]
+    pub fn observe_pop(&self) -> z_sync::notify::NotifyListener<'_, OS> {
+        self.pop_event.observe()
+    }
+
+    #[inline(always)]
     pub fn try_push(&self, item: C::Item) -> Result<(), C::Item> {
         self.container.push(item)?;
-
-        let find_waiters = self.push_event.find_waiters.load(Ordering::Relaxed);
-        self.push_event.notify(find_waiters + 1);
+        self.push_event.notify(1);
         Ok(())
     }
 

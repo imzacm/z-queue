@@ -5,13 +5,13 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use arrayvec::ArrayVec;
 use crossbeam_utils::CachePadded;
-use z_sync::Lock;
+use z_sync::Lock64;
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct SegmentedArray<T, const SEGMENT_SIZE: usize> {
-    queue: Lock<VecDeque<ArrayVec<T, SEGMENT_SIZE>>>,
+    queue: Lock64<VecDeque<ArrayVec<T, SEGMENT_SIZE>>>,
     len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
@@ -22,7 +22,7 @@ impl<T, const SEGMENT_SIZE: usize> CreateBounded for SegmentedArray<T, SEGMENT_S
         let mut queue = VecDeque::with_capacity(block_capacity);
         queue.push_back(ArrayVec::new());
         Self {
-            queue: Lock::new(queue),
+            queue: Lock64::new(queue),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
@@ -34,7 +34,7 @@ impl<T, const SEGMENT_SIZE: usize> CreateUnbounded for SegmentedArray<T, SEGMENT
         let mut queue = VecDeque::new();
         queue.push_back(ArrayVec::new());
         Self {
-            queue: Lock::new(queue),
+            queue: Lock64::new(queue),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }

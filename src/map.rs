@@ -3,16 +3,17 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::hash::{BuildHasher, Hash};
 use core::num::NonZeroUsize;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU16, Ordering};
 
 use arc_swap::ArcSwapAny;
 use crossbeam_utils::CachePadded;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
-use z_sync::Notify;
+use z_sync::{Notify, NotifyState, NotifyStateU64};
 
 use crate::ZQueue;
 use crate::container::{Container, CreateBounded, CreateUnbounded};
+use crate::queue::PushEvent;
 
 // Use triomphe if enabled.
 type ArcSwap<T> = ArcSwapAny<Arc<T>>;
@@ -29,20 +30,32 @@ enum CreateContainer<C> {
     Bounded(NonZeroUsize, fn(NonZeroUsize) -> C),
 }
 
-pub struct ZQueueMap<K, C, S: BuildHasher = DefaultHashState> {
-    queues: scc::HashMap<K, Arc<ZQueue<C>>, S>,
+pub struct ZQueueMap<
+    K,
+    C,
+    S: BuildHasher = DefaultHashState,
+    PushS: NotifyState = NotifyStateU64,
+    PopS: NotifyState = NotifyStateU64,
+    OS: NotifyState = NotifyStateU64,
+> {
+    #[allow(clippy::type_complexity)]
+    queues: scc::HashMap<K, Arc<ZQueue<C, PushS, PopS, OS>>, S>,
     keys: ArcSwap<Vec<K>>,
-    find_waiters: CachePadded<AtomicUsize>,
     create_container: CreateContainer<C>,
     // Notified on push.
-    push_event: Notify,
+    push_event: CachePadded<PushEvent<PushS, OS>>,
+    // Notified on pop.
+    pop_observe_event: CachePadded<Notify<OS>>,
 }
 
-impl<K, C, S> ZQueueMap<K, C, S>
+impl<K, C, S, PushS, PopS, OS> ZQueueMap<K, C, S, PushS, PopS, OS>
 where
     K: Clone + Eq + Hash,
     C: Container,
     S: BuildHasher + Default,
+    PushS: NotifyState,
+    PopS: NotifyState,
+    OS: NotifyState,
 {
     pub fn bounded(key_capacity: usize, queue_capacity: NonZeroUsize) -> Self
     where
@@ -59,11 +72,14 @@ where
     }
 }
 
-impl<K, C, S> ZQueueMap<K, C, S>
+impl<K, C, S, PushS, PopS, OS> ZQueueMap<K, C, S, PushS, PopS, OS>
 where
     K: Clone + Eq + Hash,
     C: Container,
     S: BuildHasher,
+    PushS: NotifyState,
+    PopS: NotifyState,
+    OS: NotifyState,
 {
     pub fn bounded_with_hasher(key_capacity: usize, queue_capacity: NonZeroUsize, hasher: S) -> Self
     where
@@ -72,9 +88,9 @@ where
         Self {
             queues: scc::HashMap::with_capacity_and_hasher(key_capacity, hasher),
             keys: ArcSwap::new(Arc::new(Vec::with_capacity(key_capacity))),
-            find_waiters: CachePadded::new(AtomicUsize::new(0)),
             create_container: CreateContainer::Bounded(queue_capacity, C::new_bounded),
-            push_event: Notify::new(),
+            push_event: CachePadded::new(PushEvent::new()),
+            pop_observe_event: CachePadded::new(Notify::new()),
         }
     }
 
@@ -85,14 +101,14 @@ where
         Self {
             queues: scc::HashMap::with_capacity_and_hasher(key_capacity, hasher),
             keys: ArcSwap::new(Arc::new(Vec::with_capacity(key_capacity))),
-            find_waiters: CachePadded::new(AtomicUsize::new(0)),
             create_container: CreateContainer::Unbounded(C::new_unbounded),
-            push_event: Notify::new(),
+            push_event: CachePadded::new(PushEvent::new()),
+            pop_observe_event: CachePadded::new(Notify::new()),
         }
     }
 
     #[inline(always)]
-    fn create_queue(&self) -> ZQueue<C> {
+    fn create_queue(&self) -> ZQueue<C, PushS, PopS, OS> {
         match &self.create_container {
             CreateContainer::Unbounded(f) => ZQueue::new(f()),
             CreateContainer::Bounded(cap, f) => ZQueue::new(f(*cap)),
@@ -117,7 +133,7 @@ where
         });
     }
 
-    fn ensure_queue_sync(&self, key: &K) -> Arc<ZQueue<C>> {
+    fn ensure_queue_sync(&self, key: &K) -> Arc<ZQueue<C, PushS, PopS, OS>> {
         let mut is_new = false;
         let queue = self.queues.entry_sync(key.clone()).or_insert_with(|| {
             is_new = true;
@@ -131,7 +147,7 @@ where
         queue.clone()
     }
 
-    async fn ensure_queue_async(&self, key: &K) -> Arc<ZQueue<C>> {
+    async fn ensure_queue_async(&self, key: &K) -> Arc<ZQueue<C, PushS, PopS, OS>> {
         let mut is_new = false;
         let queue = self.queues.entry_async(key.clone()).await.or_insert_with(|| {
             is_new = true;
@@ -212,6 +228,16 @@ where
     }
 
     #[inline(always)]
+    pub fn observe_push(&self) -> z_sync::notify::NotifyListener<'_, OS> {
+        self.push_event.observe()
+    }
+
+    #[inline(always)]
+    pub fn observe_pop(&self) -> z_sync::notify::NotifyListener<'_, OS> {
+        self.pop_observe_event.listener()
+    }
+
+    #[inline(always)]
     pub fn clear(&self) {
         self.queues.clear_sync();
     }
@@ -224,22 +250,16 @@ where
     #[inline(always)]
     pub fn try_push(&self, key: K, item: C::Item) -> Result<(), C::Item> {
         let queue = self.ensure_queue_sync(&key);
-
         queue.try_push(item)?;
-
-        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-        self.push_event.notify(find_waiters + 1);
+        self.push_event.notify(1);
         Ok(())
     }
 
     #[inline(always)]
     pub async fn try_push_async(&self, key: K, item: C::Item) -> Result<(), C::Item> {
         let queue = self.ensure_queue_async(&key).await;
-
         queue.try_push(item)?;
-
-        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-        self.push_event.notify(find_waiters + 1);
+        self.push_event.notify(1);
         Ok(())
     }
 
@@ -247,16 +267,14 @@ where
     pub fn push(&self, key: K, item: C::Item) {
         let queue = self.ensure_queue_sync(&key);
         queue.push(item);
-        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-        self.push_event.notify(find_waiters + 1);
+        self.push_event.notify(1);
     }
 
     #[inline(always)]
     pub async fn push_async(&self, key: K, item: C::Item) {
         let queue = self.ensure_queue_async(&key).await;
         queue.push_async(item).await;
-        let find_waiters = self.find_waiters.load(Ordering::Relaxed);
-        self.push_event.notify(find_waiters + 1);
+        self.push_event.notify(1);
     }
 
     pub fn try_pop<KF>(&self, mut key_fn: KF) -> Option<(K, C::Item)>
@@ -272,6 +290,7 @@ where
             let Some(queue) = self.queues.get_sync(key) else { continue };
             if let Some(item) = queue.try_pop() {
                 self.rotate_keys();
+                self.pop_observe_event.notify(usize::MAX);
                 return Some((key.clone(), item));
             }
         }
@@ -291,6 +310,7 @@ where
 
             let Some(queue) = self.queues.get_async(key).await else { continue };
             if let Some(item) = queue.try_pop() {
+                self.pop_observe_event.notify(usize::MAX);
                 self.rotate_keys();
                 return Some((key.clone(), item));
             }
@@ -358,6 +378,7 @@ where
 
             let Some(queue) = self.queues.get_sync(key) else { continue };
             if let Some(item) = queue.try_find(&mut find_fn) {
+                self.pop_observe_event.notify(usize::MAX);
                 self.rotate_keys();
                 return Some((key.clone(), item));
             }
@@ -383,6 +404,7 @@ where
 
             let Some(queue) = self.queues.get_async(key).await else { continue };
             if let Some(item) = queue.try_find(&mut find_fn) {
+                self.pop_observe_event.notify(usize::MAX);
                 self.rotate_keys();
                 return Some((key.clone(), item));
             }
@@ -396,8 +418,8 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
-        self.find_waiters.fetch_add(1, Ordering::Release);
-        let _guard = FindWaiterGuard { count: &self.find_waiters };
+        self.push_event.find_waiters.fetch_add(1, Ordering::Release);
+        let _guard = FindWaiterGuard { count: &self.push_event.find_waiters };
 
         if let Some(item) = self.try_find(&mut key_fn, &mut find_fn) {
             return item;
@@ -428,8 +450,8 @@ where
         KF: FnMut(&K) -> bool,
         F: FnMut(&C::Item) -> bool,
     {
-        self.find_waiters.fetch_add(1, Ordering::Release);
-        let _guard = FindWaiterGuard { count: &self.find_waiters };
+        self.push_event.find_waiters.fetch_add(1, Ordering::Release);
+        let _guard = FindWaiterGuard { count: &self.push_event.find_waiters };
 
         loop {
             if let Some(item) = self.try_find_async(&mut key_fn, &mut find_fn).await {
@@ -569,7 +591,7 @@ where
 }
 
 struct FindWaiterGuard<'a> {
-    count: &'a AtomicUsize,
+    count: &'a AtomicU16,
 }
 
 impl Drop for FindWaiterGuard<'_> {

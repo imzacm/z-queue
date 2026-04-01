@@ -1274,10 +1274,12 @@ dependencies = [
 [[package]]
 name = "z-sync"
 version = "0.1.0"
-source = "git+https://github.com/imzacm/z-sync.git?rev=1e441255526f6bcc3cecd2d97a2ffb246a795859#1e441255526f6bcc3cecd2d97a2ffb246a795859"
+source = "git+https://github.com/imzacm/z-sync.git?rev=9948005c5978e472fd5d5a831612b82f0ad1f492#9948005c5978e472fd5d5a831612b82f0ad1f492"
 dependencies = [
  "crossbeam-utils",
+ "num-traits",
  "parking_lot_core",
+ "pin-project-lite",
  "thin-vec",
 ]
 

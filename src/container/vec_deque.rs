@@ -4,13 +4,13 @@ use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
-use z_sync::Lock;
+use z_sync::Lock64;
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
 
 #[derive(Debug)]
 pub struct VecDeque<T> {
-    queue: Lock<RawVecDeque<T>>,
+    queue: Lock64<RawVecDeque<T>>,
     len: CachePadded<AtomicUsize>,
     capacity: Option<NonZeroUsize>,
 }
@@ -19,7 +19,7 @@ impl<T> CreateBounded for VecDeque<T> {
     fn new_bounded(capacity: NonZeroUsize) -> Self {
         let cap = capacity.get();
         Self {
-            queue: Lock::new(RawVecDeque::with_capacity(cap)),
+            queue: Lock64::new(RawVecDeque::with_capacity(cap)),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: Some(capacity),
         }
@@ -29,7 +29,7 @@ impl<T> CreateBounded for VecDeque<T> {
 impl<T> CreateUnbounded for VecDeque<T> {
     fn new_unbounded() -> Self {
         Self {
-            queue: Lock::new(RawVecDeque::new()),
+            queue: Lock64::new(RawVecDeque::new()),
             len: CachePadded::new(AtomicUsize::new(0)),
             capacity: None,
         }

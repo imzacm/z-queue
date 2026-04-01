@@ -31,7 +31,7 @@ triomphe = ["dep:triomphe"]
 thin-vec = ["z-sync/thin-vec"]
 
 [dependencies]
-z-sync = { git = "https://github.com/imzacm/z-sync.git", rev = "1e441255526f6bcc3cecd2d97a2ffb246a795859", default-features = false }
+z-sync = { git = "https://github.com/imzacm/z-sync.git", rev = "9948005c5978e472fd5d5a831612b82f0ad1f492", default-features = false }
 
 crossbeam-utils = { version = "0.8", default-features = false }
 
