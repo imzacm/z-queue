@@ -48,6 +48,14 @@ pub trait Container {
 
     fn push(&self, item: Self::Item) -> Result<(), Self::Item>;
 
+    /// Push an item, exceeding capacity is allowed.
+    ///
+    /// This will panic if the container does not explicitly support it.
+    #[allow(unused_variables)]
+    fn force_push(&self, item: Self::Item) {
+        unimplemented!("force_push is not implemented for this container type");
+    }
+
     fn pop(&self) -> Option<Self::Item>;
 
     fn find_pop<F>(&self, find_fn: F) -> Option<Self::Item>

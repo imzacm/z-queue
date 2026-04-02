@@ -69,6 +69,13 @@ impl<T> Container for VecDeque<T> {
     }
 
     #[inline(always)]
+    fn force_push(&self, item: Self::Item) {
+        let mut lock = self.queue.write();
+        lock.push_back(item);
+        self.len.fetch_add(1, Ordering::Release);
+    }
+
+    #[inline(always)]
     fn pop(&self) -> Option<T> {
         let mut lock = self.queue.write();
         let item = lock.pop_front();

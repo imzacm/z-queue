@@ -256,7 +256,7 @@ where
     pub async fn clear_async(&self) {
         self.queues.clear_async().await;
     }
-
+    
     #[inline(always)]
     pub fn try_push(&self, key: K, item: C::Item) -> Result<(), C::Item> {
         let queue = self.ensure_queue_sync(&key);
@@ -271,6 +271,20 @@ where
         queue.try_push(item)?;
         self.push_event.notify(1);
         Ok(())
+    }
+
+    #[inline(always)]
+    pub fn force_push(&self, key: K, item: C::Item) {
+        let queue = self.ensure_queue_sync(&key);
+        queue.force_push(item);
+        self.push_event.notify(1);
+    }
+
+    #[inline(always)]
+    pub async fn force_push_async(&self, key: K, item: C::Item) {
+        let queue = self.ensure_queue_async(&key).await;
+        queue.force_push(item);
+        self.push_event.notify(1);
     }
 
     #[inline(always)]

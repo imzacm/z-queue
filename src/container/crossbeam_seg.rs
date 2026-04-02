@@ -48,6 +48,12 @@ impl<T> Container for CrossbeamSegQueue<T> {
     }
 
     #[inline(always)]
+    fn force_push(&self, item: Self::Item) {
+        let _guard = self.state.push();
+        self.queue.push(item);
+    }
+
+    #[inline(always)]
     fn pop(&self) -> Option<T> {
         let _guard = self.state.pop();
         self.queue.pop()

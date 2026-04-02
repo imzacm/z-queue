@@ -170,6 +170,12 @@ where
         Ok(())
     }
 
+    #[inline(always)]
+    pub fn force_push(&self, item: C::Item) {
+        self.container.force_push(item);
+        self.push_event.notify(1);
+    }
+
     pub fn push(&self, mut item: C::Item) {
         if !self.has_capacity {
             let result = self.try_push(item);
