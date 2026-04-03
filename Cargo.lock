@@ -1274,7 +1274,7 @@ dependencies = [
 [[package]]
 name = "z-sync"
 version = "0.1.0"
-source = "git+https://github.com/imzacm/z-sync.git?rev=cd51bb3782ccfc724cc473246cbc46414aaa1dfe#cd51bb3782ccfc724cc473246cbc46414aaa1dfe"
+source = "git+https://github.com/imzacm/z-sync.git?rev=f617b87367c077cc6698060bdd4e8d1e2e62acae#f617b87367c077cc6698060bdd4e8d1e2e62acae"
 dependencies = [
  "crossbeam-utils",
  "num-traits",
