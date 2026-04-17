@@ -250,11 +250,15 @@ where
     #[inline(always)]
     pub fn clear(&self) {
         self.queues.clear_sync();
+        self.keys.store(Arc::new(Vec::new()));
+        self.pop_observe_event.notify(usize::MAX);
     }
 
     #[inline(always)]
     pub async fn clear_async(&self) {
         self.queues.clear_async().await;
+        self.keys.store(Arc::new(Vec::new()));
+        self.pop_observe_event.notify(usize::MAX);
     }
     
     #[inline(always)]
