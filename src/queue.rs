@@ -3,7 +3,7 @@ use core::num::NonZeroUsize;
 use core::sync::atomic::{AtomicU16, Ordering};
 
 use crossbeam_utils::CachePadded;
-use z_sync::{Notify, NotifyState, NotifyStateU64};
+use z_sync::{Notify, NotifyState, NotifyStateU64, SpinWait};
 
 use crate::container::{Container, CreateBounded, CreateUnbounded};
 
@@ -188,15 +188,15 @@ where
             Err(v) => item = v,
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             match self.try_push(item) {
                 Ok(()) => return,
                 Err(v) => item = v,
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 
@@ -247,14 +247,14 @@ where
             return item;
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             if let Some(item) = self.try_pop() {
                 return item;
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 
@@ -301,7 +301,7 @@ where
             return item;
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         self.push_event.find_waiters.fetch_add(1, Ordering::Release);
         loop {
             if let Some(item) = self.try_find(&mut find_fn) {
@@ -309,8 +309,8 @@ where
                 return item;
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 

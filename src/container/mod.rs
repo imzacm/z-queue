@@ -87,6 +87,7 @@ mod state {
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crossbeam_utils::CachePadded;
+    use z_sync::Backoff;
 
     #[derive(Default, Debug)]
     pub struct ContainerState {
@@ -100,11 +101,11 @@ mod state {
             value: &'v AtomicUsize,
             suspend: &AtomicBool,
         ) -> ContainerStateGuard<'v> {
-            let backoff = crossbeam_utils::Backoff::new();
+            let mut backoff = Backoff::new();
             loop {
                 // Avoid dirtying the cache line if already suspended.
                 if suspend.load(Ordering::Relaxed) {
-                    backoff.snooze();
+                    backoff.spin();
                     continue;
                 }
 
@@ -117,7 +118,7 @@ mod state {
                 value.fetch_sub(1, Ordering::Release);
 
                 while suspend.load(Ordering::Relaxed) {
-                    backoff.snooze();
+                    backoff.spin();
                 }
             }
         }
@@ -131,22 +132,22 @@ mod state {
         }
 
         pub fn suspend(&self) -> ContainerSuspendGuard<'_> {
-            let backoff = crossbeam_utils::Backoff::new();
+            let mut backoff = Backoff::new();
 
             while self
                 .suspend
                 .compare_exchange_weak(false, true, Ordering::SeqCst, Ordering::Relaxed)
                 .is_err()
             {
-                backoff.snooze();
+                backoff.spin();
             }
 
-            let backoff = crossbeam_utils::Backoff::new();
+            let mut backoff = Backoff::new();
 
             while self.active_pushes.load(Ordering::SeqCst) > 0
                 || self.active_pops.load(Ordering::SeqCst) > 0
             {
-                backoff.snooze();
+                backoff.spin();
             }
 
             ContainerSuspendGuard { value: &self.suspend }

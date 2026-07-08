@@ -9,7 +9,7 @@ use arc_swap::ArcSwapAny;
 use crossbeam_utils::CachePadded;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
-use z_sync::{Notify, NotifyState, NotifyStateU64};
+use z_sync::{Notify, NotifyState, NotifyStateU64, SpinWait};
 
 use crate::ZQueue;
 use crate::container::{Container, CreateBounded, CreateUnbounded};
@@ -373,14 +373,14 @@ where
             return item;
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             if let Some(item) = self.try_pop(&mut key_fn) {
                 return item;
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 
@@ -489,14 +489,14 @@ where
             return item;
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             if let Some(item) = self.try_find(&mut key_fn, &mut find_fn) {
                 return item;
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 

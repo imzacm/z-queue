@@ -7,6 +7,8 @@ use core::sync::atomic::Ordering;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
 
+use z_sync::SpinWait;
+
 use super::{RecvError, State};
 use crate::container::Container;
 
@@ -83,7 +85,7 @@ impl<C: Container> Receiver<C> {
             Err(e) => return Err(e),
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             match self.try_recv() {
                 Ok(Some(v)) => return Ok(v),
@@ -91,8 +93,8 @@ impl<C: Container> Receiver<C> {
                 Err(e) => return Err(e),
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 
@@ -175,7 +177,7 @@ impl<C: Container> Receiver<C> {
             Err(e) => return Err(e),
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             match self.try_find(&mut find_fn) {
                 Ok(Some(v)) => return Ok(v),
@@ -183,8 +185,8 @@ impl<C: Container> Receiver<C> {
                 Err(e) => return Err(e),
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 

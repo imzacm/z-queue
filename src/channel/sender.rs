@@ -6,6 +6,8 @@ use core::sync::atomic::Ordering;
 #[cfg(feature = "triomphe")]
 use triomphe::Arc;
 
+use z_sync::SpinWait;
+
 use super::{SendError, State};
 use crate::container::Container;
 
@@ -85,7 +87,7 @@ impl<C: Container> Sender<C> {
             Err(SendError::Full(v)) => item = v,
         }
 
-        let backoff = crossbeam_utils::Backoff::new();
+        let mut spin = SpinWait::new();
         loop {
             match self.try_send(item) {
                 Ok(()) => return Ok(()),
@@ -93,8 +95,8 @@ impl<C: Container> Sender<C> {
                 Err(SendError::Full(v)) => item = v,
             }
 
-            if !backoff.is_completed() {
-                backoff.snooze();
+            if !spin.is_completed() {
+                spin.spin();
                 continue;
             }
 
