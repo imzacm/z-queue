@@ -148,7 +148,7 @@ where
     #[inline(always)]
     pub fn clear(&self) {
         let removed = self.container.clear();
-        if self.has_capacity && removed > 0 {
+        if removed > 0 {
             self.pop_event.notify(removed);
         }
     }
@@ -236,7 +236,7 @@ where
     #[inline(always)]
     pub fn try_pop(&self) -> Option<C::Item> {
         let item = self.container.pop();
-        if item.is_some() && self.has_capacity {
+        if item.is_some() {
             self.pop_event.notify(1);
         }
         item
@@ -287,7 +287,7 @@ where
         F: FnMut(&C::Item) -> bool,
     {
         let item = self.container.find_pop(find_fn);
-        if item.is_some() && self.has_capacity {
+        if item.is_some() {
             self.pop_event.notify(1);
         }
         item
@@ -367,7 +367,7 @@ where
             self.container.retain(retain_fn)
         };
 
-        if self.has_capacity && removed > 0 {
+        if removed > 0 {
             self.pop_event.notify(removed);
         }
     }
@@ -384,7 +384,7 @@ where
         self.container.retain_into(retain_fn, into);
         let removed = into.len() - old_len;
 
-        if self.has_capacity && removed > 0 {
+        if removed > 0 {
             self.pop_event.notify(removed);
         }
     }
